@@ -86,7 +86,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 DirectionBlock(
                     title = d.title,
                     terminus = d.terminus,
-                    rows = p.nextDepartures(id, d.direction, now, 3).map { toRow(it, now) },
+                    rows = p.nextDepartures(id, d.direction, now, ROWS_PER_DIRECTION).map { toRow(it, now) },
                 )
             }
 
@@ -129,6 +129,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         // Gli orari sono quelli di Roma, anche se il telefono avesse un altro fuso.
+        /** Treni calcolati per direzione: i primi 3 nella scheda, tutti a tendina alzata. */
+        const val ROWS_PER_DIRECTION = 8
         val ROME: ZoneId = ZoneId.of("Europe/Rome")
         val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
         val DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("d/M/yyyy")
