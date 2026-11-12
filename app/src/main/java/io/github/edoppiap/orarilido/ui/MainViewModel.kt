@@ -5,6 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.edoppiap.orarilido.OrariApp
 import io.github.edoppiap.orarilido.data.PrimaryMode
+import io.github.edoppiap.orarilido.location.Geo
+import io.github.edoppiap.orarilido.location.GeoPoint
 import io.github.edoppiap.orarilido.schedule.Departure
 import io.github.edoppiap.orarilido.schedule.DayType
 import io.github.edoppiap.orarilido.schedule.Direction
@@ -43,6 +45,10 @@ data class MainUiState(
     val validFrom: String = "",
     /** Mappa in versione notturna (tra tramonto e alba), indipendente dal tema dell'app. */
     val mapNight: Boolean = false,
+    /** Posizione dell'utente (solo in memoria), null se non disponibile. */
+    val userLocation: GeoPoint? = null,
+    /** La stazione più vicina all'utente, per lo zoom della mappa. */
+    val nearestStation: Station? = null,
 )
 
 /** La scheda di una stazione: nome e una riga per ogni direzione servita. */
@@ -50,6 +56,8 @@ data class StationCardUi(
     val stationId: String,
     val name: String,
     val favorite: Boolean,
+    /** Distanza dall'utente, es. "350 m"; null senza posizione. */
+    val distance: String?,
     val blocks: List<DirectionBlock>,
 )
 
@@ -89,6 +97,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var stationId: String? = null
     private var favorites: Set<String> = emptySet()
     private var mode: PrimaryMode = PrimaryMode.NEAREST
+    /** Ultima posizione nota: SOLO in memoria, mai salvata (privacy). */
+    private var userLocation: GeoPoint? = null
 
     init {
         viewModelScope.launch {
@@ -102,7 +112,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             stationId = saved.lastStationId?.takeIf { it in validIds } ?: p.stations.first().id
             favorites = saved.favorites intersect validIds
             mode = saved.mode
-            refresh()
+            // Se il GPS ha già risposto mentre caricavamo, usiamo subito la posizione.
+            userLocation?.let { onLocation(it) } ?: refresh()
         }
     }
 
@@ -112,11 +123,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val id = stationId ?: return
         val now = LocalDateTime.now(ROME)
 
-        // Distanza "in fermate" dalla stazione di riferimento (fase 4: in metri dall'utente).
-        val refIndex = p.stations.indexOfFirst { it.id == id }
-        val byDistance = p.stations.withIndex()
-            .sortedWith(compareBy({ abs(it.index - refIndex) }, { it.index }))
-            .map { it.value }
+        val user = userLocation
+        // Ordine per distanza: in metri dall'utente se la posizione è nota,
+        // altrimenti "in fermate" dalla stazione di riferimento (l'ultima usata).
+        val byDistance = if (user != null) {
+            Geo.sortByDistance(p.stations, user)
+        } else {
+            val refIndex = p.stations.indexOfFirst { it.id == id }
+            p.stations.withIndex()
+                .sortedWith(compareBy({ abs(it.index - refIndex) }, { it.index }))
+                .map { it.value }
+        }
 
         // In primo piano: la stazione vicina, oppure le preferite (in ordine di distanza).
         val primary = when (mode) {
@@ -137,8 +154,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             stations = p.stations,
             validFrom = p.validFrom.format(DATE),
             mapNight = SunTimes.isNight(ZonedDateTime.now(ROME)),
+            userLocation = user,
+            nearestStation = if (user != null) byDistance.first() else null,
         )
         if (dayRequest != null) buildDay()  // aggiorna anche "passati / prossimo" nella giornata
+    }
+
+    /**
+     * Nuova posizione dal GPS. Aggiorna la stazione "vicina" e, se è cambiata,
+     * ne salva l'id (solo l'id, mai le coordinate) per il prossimo avvio.
+     */
+    fun onLocation(point: GeoPoint) {
+        userLocation = point
+        val p = provider ?: return  // orario non ancora caricato: ci pensa init
+        val nearest = Geo.sortByDistance(p.stations, point).first().id
+        if (nearest != stationId) {
+            stationId = nearest
+            viewModelScope.launch { orariApp.stationPrefs.setLastStationId(nearest) }
+        }
+        refresh()
     }
 
     /** Selettore "Vicina | Preferite". La scelta viene ricordata. */
@@ -252,6 +286,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         stationId = station.id,
         name = station.name,
         favorite = station.id in favorites,
+        distance = userLocation?.let { Geo.formatDistance(Geo.distanceMeters(it, station)) },
         blocks = DIRECTIONS
             .filter { p.servesDirection(station.id, it.direction) }  // ai capolinea una sola direzione
             .map { d ->

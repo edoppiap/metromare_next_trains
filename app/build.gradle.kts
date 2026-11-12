@@ -66,6 +66,12 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.maps.compose)
+    implementation(libs.play.services.location)
+    constraints {
+        // play-services-location porta con sé un androidx.fragment molto vecchio,
+        // incompatibile con la richiesta moderna dei permessi: ne forziamo uno recente.
+        implementation("androidx.fragment:fragment:1.9.1")
+    }
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

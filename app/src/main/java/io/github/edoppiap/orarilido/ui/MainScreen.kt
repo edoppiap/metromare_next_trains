@@ -122,6 +122,8 @@ fun MainScreen(
                         highlightedIds = state.highlightedIds,
                         night = state.mapNight,
                         bottomPadding = sheetHeight,
+                        userLocation = state.userLocation,
+                        nearestStation = state.nearestStation,
                         // Tocco su una stazione della mappa: la tendina scorre alla sua scheda.
                         onStationClick = { id ->
                             val index = sheetItems(state).indexOfFirst { it is SheetItem.Card && it.card.stationId == id }
@@ -315,6 +317,10 @@ private fun StationCard(
                 fontWeight = FontWeight.Bold,
                 color = colors.onSurface,
             )
+            // Distanza dall'utente in linea d'aria (solo se la posizione è nota).
+            card.distance?.let {
+                Text(it, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurfaceVariant)
+            }
             // Stella: piena e blu se preferita, vuota e grigia altrimenti.
             Text(
                 if (card.favorite) "★" else "☆",
@@ -421,7 +427,7 @@ private fun MainScreenPreview() {
         DepartureRow("35", "min", "08:36", unconfirmed = false, imminent = false),
     )
     fun card(id: String, name: String, fav: Boolean) = StationCardUi(
-        id, name, fav, listOf(
+        id, name, fav, "350 m", listOf(
             DirectionBlock(Direction.TO_ROMA, "Verso Roma", "Porta San Paolo", roma),
             DirectionBlock(Direction.TO_OSTIA, "Verso Ostia", "Cristoforo Colombo", ostia),
         )

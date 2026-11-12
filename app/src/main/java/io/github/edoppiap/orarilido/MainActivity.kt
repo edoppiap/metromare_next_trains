@@ -1,5 +1,6 @@
 package io.github.edoppiap.orarilido
 
+import android.Manifest
 import android.os.Bundle
 import android.os.Process
 import android.os.SystemClock
@@ -8,6 +9,7 @@ import android.view.View
 import android.view.ViewTreeObserver
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
@@ -16,16 +18,30 @@ import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import io.github.edoppiap.orarilido.location.LocationSource
 import io.github.edoppiap.orarilido.ui.DayScreen
 import io.github.edoppiap.orarilido.ui.MainScreen
 import io.github.edoppiap.orarilido.ui.MainViewModel
 import io.github.edoppiap.orarilido.ui.theme.OrariTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
+
+    private val locationSource by lazy { LocationSource(this) }
+
+    /** true se l'utente ci ha dato il permesso di posizione. */
+    private val locationGranted = MutableStateFlow(false)
+
+    // Finestra di sistema "Consenti l'accesso alla posizione?".
+    private val permissionRequest =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            locationGranted.value = locationSource.hasPermission()
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,7 +72,18 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        holdFirstFrameUntilReady()
+        holdFirstFrameUntilReady(askLocation = savedInstanceState == null)
+
+        // Posizione: solo mentre l'app è visibile (STARTED) e solo con il permesso.
+        // Se il permesso arriva dopo (dalla finestra di sistema), parte in quel momento.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                locationGranted.value = locationSource.hasPermission()  // può cambiare dalle Impostazioni
+                locationGranted.collectLatest { granted ->
+                    if (granted) locationSource.updates().collect { viewModel.onLocation(it) }
+                }
+            }
+        }
 
         // Aggiornamento: ogni 20 secondi e allo scoccare di ogni minuto (così
         // "tra 3 min" cambia puntuale), ma solo mentre l'app è visibile.
@@ -78,7 +105,7 @@ class MainActivity : ComponentActivity() {
      * (pochi millisecondi): così l'utente non vede mai una schermata vuota
      * seguita da un "salto", ma direttamente gli orari.
      */
-    private fun holdFirstFrameUntilReady() {
+    private fun holdFirstFrameUntilReady(askLocation: Boolean) {
         val content = findViewById<View>(android.R.id.content)
         content.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
             override fun onPreDraw(): Boolean {
@@ -88,6 +115,15 @@ class MainActivity : ComponentActivity() {
                 val ms = SystemClock.elapsedRealtime() - Process.getStartElapsedRealtime()
                 Log.i("OrariAvvio", "Orari visibili dopo $ms ms dall'avvio del processo")
                 reportFullyDrawn()
+                // Solo ORA, con gli orari già a schermo, chiediamo il permesso di posizione
+                // (se manca). Android stesso smette di chiederlo dopo due rifiuti.
+                if (askLocation && !locationSource.hasPermission()) {
+                    content.post {
+                        permissionRequest.launch(
+                            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+                        )
+                    }
+                }
                 return true
             }
         })
