@@ -9,6 +9,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -89,6 +93,23 @@ fun LineMap(
     // I nomi delle stazioni compaiono solo con uno zoom abbastanza vicino,
     // altrimenti con la linea intera si sovrapporrebbero.
     val showNames by remember { derivedStateOf { cameraState.position.zoom >= NAMES_MIN_ZOOM } }
+
+    // Animazione dei cerchi: "growth" va da 0 (tutti dentro il pallino) a 1 (misura piena).
+    // Compaiono allargandosi dal pallino, spariscono rimpicciolendosi dietro di lui.
+    val circlesVisible = showCircles && userLocation != null
+    val growth = remember { Animatable(0f) }
+    LaunchedEffect(circlesVisible) {
+        growth.animateTo(
+            targetValue = if (circlesVisible) 1f else 0f,
+            animationSpec = tween(durationMillis = if (circlesVisible) 600 else 350, easing = FastOutSlowInEasing),
+        )
+    }
+    // Anche il passaggio a piedi <-> in bici fa crescere/restringere i cerchi invece di saltare.
+    val metersPerMinute by animateFloatAsState(
+        targetValue = (if (travelMode == TravelMode.BIKE) Geo.BIKE_METERS_PER_MINUTE else Geo.WALK_METERS_PER_MINUTE).toFloat(),
+        animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing),
+        label = "metersPerMinute",
+    )
 
     // Primo caricamento: inquadra tutta la linea (tutte le stazioni).
     LaunchedEffect(mapLoaded) {
@@ -177,11 +198,10 @@ fun LineMap(
         // Posizione dell'utente: cerchi 5/10/15 minuti (a piedi o in bici) e pallino.
         userLocation?.let { user ->
             val center = LatLng(user.lat, user.lon)
-            val metersPerMinute =
-                if (travelMode == TravelMode.BIKE) Geo.BIKE_METERS_PER_MINUTE else Geo.WALK_METERS_PER_MINUTE
             val emoji = if (travelMode == TravelMode.BIKE) "🚲" else "🚶"
-            if (showCircles) WALK_MINUTES.forEach { minutes ->
-                val radius = minutes * metersPerMinute
+            val g = growth.value
+            if (g > 0.01f) WALK_MINUTES.forEach { minutes ->
+                val radius = minutes * metersPerMinute.toDouble() * g
                 Circle(
                     center = center,
                     radius = radius,
@@ -195,6 +215,7 @@ fun LineMap(
                     state = rememberUpdatedMarkerState(LatLng(user.lat + radius / 111_320.0, user.lon)),
                     anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
                     zIndex = 0.5f,
+                    alpha = g,  // le etichette sfumano insieme ai cerchi
                 ) {
                     WalkLabel("$emoji $minutes min", night)
                 }
