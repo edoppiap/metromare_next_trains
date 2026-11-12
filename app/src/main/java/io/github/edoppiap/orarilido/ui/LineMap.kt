@@ -48,6 +48,7 @@ import io.github.edoppiap.orarilido.ui.theme.CardDark
 import io.github.edoppiap.orarilido.ui.theme.Ink
 import io.github.edoppiap.orarilido.ui.theme.InkDark
 import io.github.edoppiap.orarilido.schedule.Station
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -93,6 +94,14 @@ fun LineMap(
     // I nomi delle stazioni compaiono solo con uno zoom abbastanza vicino,
     // altrimenti con la linea intera si sovrapporrebbero.
     val showNames by remember { derivedStateOf { cameraState.position.zoom >= NAMES_MIN_ZOOM } }
+    // Stazione toccata con lo zoom lontano: il suo nome compare per qualche secondo.
+    var revealedId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(revealedId) {
+        if (revealedId != null) {
+            delay(NAME_REVEAL_MS)
+            revealedId = null
+        }
+    }
 
     // Animazione dei cerchi: "growth" va da 0 (tutti dentro il pallino) a 1 (misura piena).
     // Compaiono allargandosi dal pallino, spariscono rimpicciolendosi dietro di lui.
@@ -170,17 +179,17 @@ fun LineMap(
             MarkerComposable(
                 keys = arrayOf<Any>(s.id, selected, dark),
                 state = rememberUpdatedMarkerState(LatLng(s.lat, s.lon)),
-                title = s.name,
                 anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
                 zIndex = if (selected) 2f else 1f,
                 onClick = {
                     onStationClick(s.id)
-                    false  // false = mostra anche l'etichetta col nome
+                    revealedId = s.id
+                    true  // true = niente fumetto di Google: usiamo la nostra etichetta
                 },
             ) {
                 StationDot(selected, night)
             }
-            if (showNames) {
+            if (showNames || s.id == revealedId) {
                 // Etichetta col nome: il bordo sinistro sta sul pallino, il testo parte
                 // un po' più a destra (padding), così non lo copre.
                 MarkerComposable(
@@ -261,6 +270,8 @@ private val WALK_MINUTES = listOf(5, 10, 15)
 /** Oltre questa distanza dalla stazione più vicina, niente zoom automatico. */
 private const val MAX_ZOOM_DISTANCE_M = 30_000.0
 private const val MAX_ZOOM = 16f
+/** Per quanto resta visibile il nome di una stazione toccata da lontano. */
+private const val NAME_REVEAL_MS = 3_000L
 /** Da questo zoom in su compaiono i nomi delle stazioni (13 ≈ quartiere). */
 private const val NAMES_MIN_ZOOM = 13f
 
