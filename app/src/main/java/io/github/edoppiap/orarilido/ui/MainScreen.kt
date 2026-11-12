@@ -17,7 +17,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,6 +38,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -51,8 +53,6 @@ import io.github.edoppiap.orarilido.schedule.Station
 import io.github.edoppiap.orarilido.ui.theme.OrariTheme
 import kotlinx.coroutines.launch
 
-/** Quanti treni per direzione nella scheda compatta (tendina a 1/3). */
-private const val COMPACT_ROWS = 3
 
 /**
  * Schermata principale, stile Citymapper: mappa a tutto schermo e sopra
@@ -124,97 +124,69 @@ fun MainScreen(state: MainUiState, onSelectStation: (String) -> Unit) {
 }
 
 /**
- * Contenuto della tendina: una colonna scorrevole di schede.
- * La prima (stazione) è quella visibile con la tendina a 1/3;
- * le altre compaiono tirandola su.
+ * Contenuto della tendina: una scheda per stazione, una sotto l'altra.
+ * La prima è quella in primo piano (visibile con la tendina a 1/3);
+ * per vedere le altre basta scorrere. Tocco su una scheda = la porta in primo piano.
  */
 @Composable
 private fun SheetContent(state: MainUiState, onSelectStation: (String) -> Unit) {
+    val listState = rememberLazyListState()
+    // Quando cambia la stazione in primo piano, torna in cima alla lista.
+    LaunchedEffect(state.stationId) { listState.scrollToItem(0) }
+
     LazyColumn(
         Modifier
             .fillMaxWidth()
             .fillMaxHeight(),  // a tendina alzata occupa tutto lo schermo
+        state = listState,
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item { StationCard(state) }
-
-        // ---- Visibile tirando su la tendina ----
-        state.blocks.forEach { block ->
-            item(key = "more_${block.title}") { DirectionCard(block) }
+        itemsIndexed(state.cards, key = { _, card -> card.stationId }) { i, card ->
+            StationCard(
+                card = card,
+                primary = i == 0,
+                validFrom = state.validFrom,
+                onClick = { onSelectStation(card.stationId) },
+            )
         }
-        item(key = "stations") { StationsCard(state, onSelectStation) }
     }
 }
 
 /** Riquadro con angoli smussati, colore "scheda" sopra lo sfondo della tendina. */
 @Composable
-private fun SheetCard(content: @Composable () -> Unit) {
+private fun SheetCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp),
     ) { content() }
 }
 
-/** Titolo di una scheda (es. il nome della stazione). */
+/** Scheda di una stazione: nome come titolo, una riga per direzione. */
 @Composable
-private fun CardTitle(text: String) {
-    Text(
-        text,
-        modifier = Modifier.padding(bottom = 12.dp),
-        fontSize = 20.sp,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.onSurface,
-    )
-}
-
-/** La scheda della stazione: nome come titolo, una riga per direzione. */
-@Composable
-private fun StationCard(state: MainUiState) {
-    SheetCard {
-        CardTitle(state.stationName)
-        state.blocks.forEachIndexed { i, block ->
+private fun StationCard(card: StationCardUi, primary: Boolean, validFrom: String, onClick: () -> Unit) {
+    SheetCard(if (primary) Modifier else Modifier.clickable(onClick = onClick)) {
+        Text(
+            card.name,
+            modifier = Modifier.padding(bottom = 12.dp),
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        card.blocks.forEachIndexed { i, block ->
             if (i > 0) HorizontalDivider(Modifier.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.outlineVariant)
             CompactDirectionRow(block)
         }
-        Text(
-            "Orari programmati, non in tempo reale · in vigore dal ${state.validFrom}",
-            modifier = Modifier.padding(top = 12.dp),
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-/** Scheda "lunga" di una direzione: pillola + capolinea, poi tutti i treni. */
-@Composable
-private fun DirectionCard(block: DirectionBlock) {
-    SheetCard {
-        Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            DirectionPill(block.title)
+        if (primary) {
             Text(
-                "  " + block.terminus,
-                fontSize = 14.sp,
+                "Orari programmati, non in tempo reale · in vigore dal $validFrom",
+                modifier = Modifier.padding(top = 12.dp),
+                fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-        block.rows.forEachIndexed { i, row ->
-            if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            FullDepartureLine(row)
-        }
-    }
-}
-
-/** Scheda con l'elenco delle stazioni (nella fase 4: ordinate per distanza). */
-@Composable
-private fun StationsCard(state: MainUiState, onSelectStation: (String) -> Unit) {
-    SheetCard {
-        CardTitle("Stazioni")
-        state.stations.forEachIndexed { i, s ->
-            if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            StationLine(s, selected = s.id == state.stationId, onClick = { onSelectStation(s.id) })
         }
     }
 }
@@ -226,7 +198,7 @@ private fun CompactDirectionRow(block: DirectionBlock) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         DirectionPill(block.title, Modifier.width(112.dp))
         Spacer(Modifier.width(12.dp))
-        block.rows.take(COMPACT_ROWS).forEachIndexed { i, row ->
+        block.rows.forEachIndexed { i, row ->
             Column(Modifier.weight(if (i == 0) 1.3f else 1f)) {
                 Text(
                     waitText(row),
@@ -244,40 +216,6 @@ private fun CompactDirectionRow(block: DirectionBlock) {
             }
         }
     }
-}
-
-/** Riga della lista lunga: "tra 18 min .......... 08:18" */
-@Composable
-private fun FullDepartureLine(row: DepartureRow) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            if (row.waitUnit.isEmpty()) row.wait else "tra ${row.wait} ${row.waitUnit}",
-            modifier = Modifier.weight(1f),
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = if (row.imminent) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurface,
-        )
-        Text(clockText(row), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun StationLine(station: Station, selected: Boolean, onClick: () -> Unit) {
-    Text(
-        station.name,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
-        fontSize = 16.sp,
-        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-    )
 }
 
 @Composable
@@ -336,12 +274,15 @@ private fun MainScreenPreview() {
             MainUiState(
                 ready = true,
                 stationId = "acilia",
-                stationName = "Acilia",
                 validFrom = "9/11/2026",
-                blocks = listOf(
-                    DirectionBlock("Verso Roma", "Porta San Paolo", roma),
-                    DirectionBlock("Verso Ostia", "Cristoforo Colombo", ostia),
-                ),
+                cards = listOf("acilia" to "Acilia", "vitinia" to "Vitinia").map { (id, name) ->
+                    StationCardUi(
+                        id, name, listOf(
+                            DirectionBlock("Verso Roma", "Porta San Paolo", roma),
+                            DirectionBlock("Verso Ostia", "Cristoforo Colombo", ostia),
+                        )
+                    )
+                },
                 stations = listOf(Station("acilia", "Acilia", 0.0, 0.0), Station("vitinia", "Vitinia", 0.0, 0.0)),
             ),
             onSelectStation = {},

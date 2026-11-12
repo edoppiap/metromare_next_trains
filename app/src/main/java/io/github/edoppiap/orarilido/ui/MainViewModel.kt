@@ -18,14 +18,19 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import kotlin.math.abs
 
 // ---- Stato della schermata: tutto ciò che la UI deve disegnare, già "masticato" ----
 
 data class MainUiState(
     val ready: Boolean = false,
+    /** La stazione in primo piano (la prima scheda, evidenziata sulla mappa). */
     val stationId: String = "",
-    val stationName: String = "",
-    val blocks: List<DirectionBlock> = emptyList(),
+    /**
+     * Una scheda per stazione: la prima è quella in primo piano, poi le
+     * altre in ordine di vicinanza sulla linea (fase 4: distanza dall'utente).
+     */
+    val cards: List<StationCardUi> = emptyList(),
     val stations: List<Station> = emptyList(),
     /** Es. "9/11/2026": data di inizio validità dell'orario in uso. */
     val validFrom: String = "",
@@ -33,7 +38,14 @@ data class MainUiState(
     val mapNight: Boolean = false,
 )
 
-/** Un riquadro "Verso Roma" / "Verso Ostia". */
+/** La scheda di una stazione: nome e una riga per ogni direzione servita. */
+data class StationCardUi(
+    val stationId: String,
+    val name: String,
+    val blocks: List<DirectionBlock>,
+)
+
+/** Una riga "Verso Roma" / "Verso Ostia" con i suoi prossimi treni. */
 data class DirectionBlock(
     val title: String,       // "Verso Roma"
     val terminus: String,    // "Porta San Paolo"
@@ -82,23 +94,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val p = provider ?: return
         val id = stationId ?: return
         val now = LocalDateTime.now(ROME)
-        val station = p.stations.first { it.id == id }
 
-        val blocks = DIRECTIONS
-            .filter { p.servesDirection(id, it.direction) }
-            .map { d ->
-                DirectionBlock(
-                    title = d.title,
-                    terminus = d.terminus,
-                    rows = p.nextDepartures(id, d.direction, now, ROWS_PER_DIRECTION).map { toRow(it, now) },
-                )
-            }
+        // Ordine delle schede: prima la stazione in primo piano, poi le altre
+        // per numero di fermate di distanza (a parità, prima quella verso Roma).
+        val selectedIndex = p.stations.indexOfFirst { it.id == id }
+        val ordered = p.stations.withIndex()
+            .sortedWith(compareBy({ abs(it.index - selectedIndex) }, { it.index }))
+            .map { it.value }
+
+        // 14 stazioni × 2 direzioni × 3 treni: calcolo di pochi microsecondi.
+        val cards = ordered.map { station -> buildCard(p, station, now) }
 
         _state.value = MainUiState(
             ready = true,
             stationId = id,
-            stationName = station.name,
-            blocks = blocks,
+            cards = cards,
             stations = p.stations,
             validFrom = p.validFrom.format(DATE),
             mapNight = SunTimes.isNight(ZonedDateTime.now(ROME)),
@@ -111,6 +121,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
         viewModelScope.launch { orariApp.stationPrefs.setLastStationId(id) }
     }
+
+    private fun buildCard(p: ScheduleProvider, station: Station, now: LocalDateTime) = StationCardUi(
+        stationId = station.id,
+        name = station.name,
+        blocks = DIRECTIONS
+            .filter { p.servesDirection(station.id, it.direction) }  // ai capolinea una sola direzione
+            .map { d ->
+                DirectionBlock(
+                    title = d.title,
+                    terminus = d.terminus,
+                    rows = p.nextDepartures(station.id, d.direction, now, ROWS_PER_DIRECTION)
+                        .map { toRow(it, now) },
+                )
+            },
+    )
 
     private fun toRow(dep: Departure, now: LocalDateTime): DepartureRow {
         val minutes = Duration.between(now, dep.time).toMinutes()  // arrotondato per difetto
@@ -134,8 +159,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         // Gli orari sono quelli di Roma, anche se il telefono avesse un altro fuso.
-        /** Treni calcolati per direzione: i primi 3 nella scheda, tutti a tendina alzata. */
-        const val ROWS_PER_DIRECTION = 8
+        /** Treni mostrati per direzione in ogni scheda. */
+        const val ROWS_PER_DIRECTION = 3
         val ROME: ZoneId = ZoneId.of("Europe/Rome")
         val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
         val DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("d/M/yyyy")
