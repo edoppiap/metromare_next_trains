@@ -37,7 +37,8 @@ object ScheduleParser {
         val validFrom = parseDate(raw.validFrom, "validFrom")
 
         // Stazioni: almeno due, id tutti diversi.
-        val stations = raw.stations.map { Station(it.id, it.name) }
+        val stations = raw.stations.map { Station(it.id, it.name, it.lat, it.lon) }
+        check(stations.all { it.lat in -90.0..90.0 && it.lon in -180.0..180.0 }) { "coordinate non valide" }
         check(stations.size >= 2) { "servono almeno 2 stazioni" }
         check(stations.map { it.id }.toSet().size == stations.size) { "id di stazione duplicati" }
         val indexById = stations.withIndex().associate { (i, s) -> s.id to i }
@@ -141,7 +142,7 @@ private data class ScheduleJson(
 )
 
 @Serializable
-private data class StationJson(val id: String, val name: String)
+private data class StationJson(val id: String, val name: String, val lat: Double, val lon: Double)
 
 @Serializable
 private data class ExtraTripJson(

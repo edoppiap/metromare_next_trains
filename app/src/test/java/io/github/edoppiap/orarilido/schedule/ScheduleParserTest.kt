@@ -18,7 +18,11 @@ class ScheduleParserTest {
           "version": 1,
           "validFrom": "$validFrom",
           "campoSconosciuto": "ignorato",
-          "stations": [{"id": "a", "name": "A"}, {"id": "b", "name": "B"}, {"id": "c", "name": "C"}],
+          "stations": [
+            {"id": "a", "name": "A", "lat": 1.0, "lon": 1.0},
+            {"id": "b", "name": "B", "lat": 1.1, "lon": 1.0},
+            {"id": "c", "name": "C", "lat": 1.2, "lon": 1.0}
+          ],
           "minutesFromTerminus": {
             "toOstia": $toOstiaMinutes,
             "toRoma": {"c": 0, "b": 5, "a": 10}

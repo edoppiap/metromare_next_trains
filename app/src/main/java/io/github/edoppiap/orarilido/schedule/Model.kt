@@ -22,8 +22,8 @@ enum class DayType(val jsonKey: String) {
     HOLIDAY("holiday"),   // domenica e festivi
 }
 
-/** Una stazione. L'ordine nella lista va da Roma (indice 0) verso Ostia. */
-data class Station(val id: String, val name: String)
+/** Una stazione, con coordinate (da OpenStreetMap). L'ordine nella lista va da Roma (indice 0) verso Ostia. */
+data class Station(val id: String, val name: String, val lat: Double, val lon: Double)
 
 /**
  * Una corsa: parte dalla stazione [originIndex] al minuto [departureMinute]

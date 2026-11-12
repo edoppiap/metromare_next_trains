@@ -28,6 +28,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.material3.rememberStandardBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,9 +76,10 @@ fun MainScreen(state: MainUiState, onSelectStation: (String) -> Unit) {
 
     // BoxWithConstraints ci dice quanto è alto lo schermo, per calcolare 1/3.
     BoxWithConstraints(Modifier.fillMaxSize()) {
+        val sheetHeight = maxHeight / 3  // altezza della tendina a 1/3
         BottomSheetScaffold(
             scaffoldState = scaffoldState,
-            sheetPeekHeight = maxHeight / 3,
+            sheetPeekHeight = sheetHeight,
             // Sfondo della tendina = sfondo dell'app; le schede sopra sono più chiare.
             sheetContainerColor = MaterialTheme.colorScheme.background,
             sheetContent = {
@@ -85,22 +92,33 @@ fun MainScreen(state: MainUiState, onSelectStation: (String) -> Unit) {
                 )
             },
         ) {
-            // Il "corpo" dietro la tendina: qui andrà la mappa Google.
-            MapPlaceholder(Modifier.padding(bottom = maxHeight / 3))
+            // Il "corpo" dietro la tendina: la mappa, a TUTTO schermo, così si
+            // vede anche dietro gli angoli smussati della tendina.
+            //
+            // Velocità: creare la mappa Google costa centinaia di ms. Per non
+            // ritardare gli orari, al primo fotogramma c'è solo lo sfondo;
+            // la mappa viene creata subito DOPO che gli orari sono a schermo.
+            var showMap by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) {
+                withFrameNanos { }  // aspetta che il primo fotogramma sia disegnato
+                showMap = true
+            }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+            ) {
+                if (showMap) {
+                    LineMap(
+                        stations = state.stations,
+                        selectedStationId = state.stationId,
+                        bottomPadding = sheetHeight,
+                        onStationClick = onSelectStation,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
         }
-    }
-}
-
-/** Sfondo provvisorio al posto della mappa, finché non c'è la chiave Google Maps. */
-@Composable
-private fun MapPlaceholder(modifier: Modifier = Modifier) {
-    Box(
-        modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text("Mappa in arrivo", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
     }
 }
 
@@ -323,7 +341,7 @@ private fun MainScreenPreview() {
                     DirectionBlock("Verso Roma", "Porta San Paolo", roma),
                     DirectionBlock("Verso Ostia", "Cristoforo Colombo", ostia),
                 ),
-                stations = listOf(Station("acilia", "Acilia"), Station("vitinia", "Vitinia")),
+                stations = listOf(Station("acilia", "Acilia", 0.0, 0.0), Station("vitinia", "Vitinia", 0.0, 0.0)),
             ),
             onSelectStation = {},
         )
