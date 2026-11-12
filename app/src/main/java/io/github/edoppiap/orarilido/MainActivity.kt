@@ -1,47 +1,73 @@
 package io.github.edoppiap.orarilido
 
 import android.os.Bundle
+import android.os.Process
+import android.os.SystemClock
+import android.util.Log
+import android.view.View
+import android.view.ViewTreeObserver
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import io.github.edoppiap.orarilido.ui.theme.Orari_RomaLidoTheme
+import androidx.activity.viewModels
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import io.github.edoppiap.orarilido.ui.MainScreen
+import io.github.edoppiap.orarilido.ui.MainViewModel
+import io.github.edoppiap.orarilido.ui.theme.OrariTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+
+    private val viewModel: MainViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
         setContent {
-            Orari_RomaLidoTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
+            OrariTheme {
+                val state by viewModel.state.collectAsState()
+                MainScreen(state, onSelectStation = viewModel::selectStation)
+            }
+        }
+
+        holdFirstFrameUntilReady()
+
+        // Aggiornamento: ogni 20 secondi, ma solo mentre l'app è visibile.
+        // repeatOnLifecycle riparte da capo quando l'app torna in primo piano,
+        // quindi c'è anche un aggiornamento immediato al ritorno.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    viewModel.refresh()
+                    delay(20_000)
                 }
             }
         }
     }
-}
 
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    Orari_RomaLidoTheme {
-        Greeting("Android")
+    /**
+     * Non disegna il primo fotogramma finché gli orari non sono pronti
+     * (pochi millisecondi): così l'utente non vede mai una schermata vuota
+     * seguita da un "salto", ma direttamente gli orari.
+     */
+    private fun holdFirstFrameUntilReady() {
+        val content = findViewById<View>(android.R.id.content)
+        content.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                if (!viewModel.state.value.ready) return false  // non ancora: salta il disegno
+                content.viewTreeObserver.removeOnPreDrawListener(this)
+                // Misura per noi: millisecondi dall'avvio del processo al primo fotogramma utile.
+                val ms = SystemClock.elapsedRealtime() - Process.getStartElapsedRealtime()
+                Log.i("OrariAvvio", "Orari visibili dopo $ms ms dall'avvio del processo")
+                reportFullyDrawn()
+                return true
+            }
+        })
     }
 }

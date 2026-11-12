@@ -2,10 +2,25 @@ package io.github.edoppiap.orarilido.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
+// Palette dell'app (vedi CLAUDE.md, sezione Stile):
+// blu della linea + grigio "stazione"; corallo e rosso solo come segnali.
 
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+// Tema chiaro
+val Blue = Color(0xFF0077B3)          // colore della linea
+val Grey = Color(0xFF5F6B76)          // testi secondari
+val GreyLight = Color(0xFFDDE2E7)     // separatori, superfici
+val Background = Color(0xFFF6F8FA)
+val Card = Color(0xFFFFFFFF)
+val Ink = Color(0xFF14181C)           // testo principale, numeri
+val Coral = Color(0xFFFF7A59)         // treno in arrivo entro 3 minuti
+val Red = Color(0xFFE03A3E)           // "?" delle corse non confermate
+
+// Tema scuro
+val BlueDark = Color(0xFF4FB0E3)
+val GreyDark = Color(0xFF9AA5B0)
+val GreyLightDark = Color(0xFF2A323A)
+val BackgroundDark = Color(0xFF0F1418)
+val CardDark = Color(0xFF1A2128)
+val InkDark = Color(0xFFF2F4F5)
+val CoralDark = Color(0xFFFF9A80)
+val RedDark = Color(0xFFFF5A60)

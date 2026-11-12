@@ -1,58 +1,54 @@
 package io.github.edoppiap.orarilido.ui.theme
 
-import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
 
-private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+// Material 3 ha dei "ruoli" di colore predefiniti: li riempiamo con la nostra
+// palette. I colori dinamici di Android 12+ (presi dallo sfondo del telefono)
+// sono volutamente disattivati: l'app deve avere sempre il blu della linea.
+//
+// Ruoli usati:
+//   primary          → blu linea (pillole, pulsanti)
+//   onSurfaceVariant → grigio dei testi secondari
+//   tertiary         → corallo, treno imminente
+//   error            → rosso, "?" corse non confermate
+
+private val LightColors = lightColorScheme(
+    primary = Blue,
+    onPrimary = Card,
+    background = Background,
+    onBackground = Ink,
+    surface = Card,
+    onSurface = Ink,
+    onSurfaceVariant = Grey,
+    outlineVariant = GreyLight,
+    tertiary = Coral,
+    error = Red,
 )
 
-private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+private val DarkColors = darkColorScheme(
+    primary = BlueDark,
+    onPrimary = BackgroundDark,
+    background = BackgroundDark,
+    onBackground = InkDark,
+    surface = CardDark,
+    onSurface = InkDark,
+    onSurfaceVariant = GreyDark,
+    outlineVariant = GreyLightDark,
+    tertiary = CoralDark,
+    error = RedDark,
 )
 
 @Composable
-fun Orari_RomaLidoTheme(
+fun OrariTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
-    content: @Composable () -> Unit
+    content: @Composable () -> Unit,
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
-
     MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content
+        colorScheme = if (darkTheme) DarkColors else LightColors,
+        content = content,
     )
 }

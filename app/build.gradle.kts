@@ -22,9 +22,15 @@ android {
 
     buildTypes {
         release {
+            // TEMPORANEO: firma con la chiave di debug, solo per provare e misurare
+            // la build ottimizzata sul telefono. Prima di distribuire l'app
+            // andrà creata una chiave vera (fuori da git).
+            signingConfig = signingConfigs.getByName("debug")
             optimization {
+                // R8 ottimizza e riduce tutto il codice (nostro + librerie).
+                // NB: limitarlo ad alcuni pacchetti (packageScope, come nel modello
+                // di Android Studio) faceva crashare l'app all'avvio.
                 enable = true
-                packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
             }
         }
     }
@@ -47,6 +53,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.androidx.datastore.preferences)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
