@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -72,7 +73,8 @@ fun MainScreen(state: MainUiState, onSelectStation: (String) -> Unit) {
         BottomSheetScaffold(
             scaffoldState = scaffoldState,
             sheetPeekHeight = maxHeight / 3,
-            sheetContainerColor = MaterialTheme.colorScheme.surface,
+            // Sfondo della tendina = sfondo dell'app; le schede sopra sono più chiare.
+            sheetContainerColor = MaterialTheme.colorScheme.background,
             sheetContent = {
                 SheetContent(
                     state = state,
@@ -103,8 +105,9 @@ private fun MapPlaceholder(modifier: Modifier = Modifier) {
 }
 
 /**
- * Contenuto della tendina, in un'unica lista scorrevole:
- * prima la scheda compatta (quella visibile a 1/3), poi più treni, poi le stazioni.
+ * Contenuto della tendina: una colonna scorrevole di schede.
+ * La prima (stazione) è quella visibile con la tendina a 1/3;
+ * le altre compaiono tirandola su.
  */
 @Composable
 private fun SheetContent(state: MainUiState, onSelectStation: (String) -> Unit) {
@@ -112,44 +115,88 @@ private fun SheetContent(state: MainUiState, onSelectStation: (String) -> Unit) 
         Modifier
             .fillMaxWidth()
             .fillMaxHeight(),  // a tendina alzata occupa tutto lo schermo
+        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { StationCard(state) }
 
         // ---- Visibile tirando su la tendina ----
         state.blocks.forEach { block ->
-            item(key = "more_${block.title}") {
-                SectionTitle("${block.title} · ${block.terminus}")
-            }
-            items(block.rows) { row -> FullDepartureLine(row) }
+            item(key = "more_${block.title}") { DirectionCard(block) }
         }
-
-        item { SectionTitle("Stazioni") }
-        items(state.stations, key = { it.id }) { s ->
-            StationLine(s, selected = s.id == state.stationId, onClick = { onSelectStation(s.id) })
-        }
-        item { Spacer(Modifier.height(24.dp)) }
+        item(key = "stations") { StationsCard(state, onSelectStation) }
     }
 }
 
-/** La scheda compatta: nome stazione e una riga per direzione. */
+/** Riquadro con angoli smussati, colore "scheda" sopra lo sfondo della tendina. */
+@Composable
+private fun SheetCard(content: @Composable () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+            .padding(16.dp),
+    ) { content() }
+}
+
+/** Titolo di una scheda (es. il nome della stazione). */
+@Composable
+private fun CardTitle(text: String) {
+    Text(
+        text,
+        modifier = Modifier.padding(bottom = 12.dp),
+        fontSize = 20.sp,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+}
+
+/** La scheda della stazione: nome come titolo, una riga per direzione. */
 @Composable
 private fun StationCard(state: MainUiState) {
-    Column(
-        Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Text(
-            state.stationName,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        state.blocks.forEach { CompactDirectionRow(it) }
+    SheetCard {
+        CardTitle(state.stationName)
+        state.blocks.forEachIndexed { i, block ->
+            if (i > 0) HorizontalDivider(Modifier.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            CompactDirectionRow(block)
+        }
         Text(
             "Orari programmati, non in tempo reale · in vigore dal ${state.validFrom}",
+            modifier = Modifier.padding(top = 12.dp),
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/** Scheda "lunga" di una direzione: pillola + capolinea, poi tutti i treni. */
+@Composable
+private fun DirectionCard(block: DirectionBlock) {
+    SheetCard {
+        Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            DirectionPill(block.title)
+            Text(
+                "  " + block.terminus,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        block.rows.forEachIndexed { i, row ->
+            if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            FullDepartureLine(row)
+        }
+    }
+}
+
+/** Scheda con l'elenco delle stazioni (nella fase 4: ordinate per distanza). */
+@Composable
+private fun StationsCard(state: MainUiState, onSelectStation: (String) -> Unit) {
+    SheetCard {
+        CardTitle("Stazioni")
+        state.stations.forEachIndexed { i, s ->
+            if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            StationLine(s, selected = s.id == state.stationId, onClick = { onSelectStation(s.id) })
+        }
     }
 }
 
@@ -186,7 +233,7 @@ private fun FullDepartureLine(row: DepartureRow) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -207,25 +254,11 @@ private fun StationLine(station: Station, selected: Boolean, onClick: () -> Unit
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(vertical = 12.dp),
         fontSize = 16.sp,
         fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
         color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
     )
-}
-
-@Composable
-private fun SectionTitle(text: String) {
-    Column(Modifier.padding(top = 16.dp)) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Text(
-            text,
-            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
 }
 
 @Composable
