@@ -1,0 +1,5 @@
+# Lo script gradlew deve restare con fine riga Unix, il .bat con quelli Windows
+* text=auto
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary
