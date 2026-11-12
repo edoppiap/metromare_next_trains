@@ -8,6 +8,7 @@ import io.github.edoppiap.orarilido.schedule.Departure
 import io.github.edoppiap.orarilido.schedule.Direction
 import io.github.edoppiap.orarilido.schedule.ScheduleProvider
 import io.github.edoppiap.orarilido.schedule.Station
+import io.github.edoppiap.orarilido.schedule.SunTimes
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,6 +16,7 @@ import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
 // ---- Stato della schermata: tutto ciò che la UI deve disegnare, già "masticato" ----
@@ -27,6 +29,8 @@ data class MainUiState(
     val stations: List<Station> = emptyList(),
     /** Es. "9/11/2026": data di inizio validità dell'orario in uso. */
     val validFrom: String = "",
+    /** Mappa in versione notturna (tra tramonto e alba), indipendente dal tema dell'app. */
+    val mapNight: Boolean = false,
 )
 
 /** Un riquadro "Verso Roma" / "Verso Ostia". */
@@ -97,6 +101,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             blocks = blocks,
             stations = p.stations,
             validFrom = p.validFrom.format(DATE),
+            mapNight = SunTimes.isNight(ZonedDateTime.now(ROME)),
         )
     }
 

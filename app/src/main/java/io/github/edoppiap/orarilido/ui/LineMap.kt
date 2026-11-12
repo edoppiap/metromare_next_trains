@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,6 +30,10 @@ import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberUpdatedMarkerState
 import io.github.edoppiap.orarilido.R
+import io.github.edoppiap.orarilido.ui.theme.Blue
+import io.github.edoppiap.orarilido.ui.theme.BlueDark
+import io.github.edoppiap.orarilido.ui.theme.Card
+import io.github.edoppiap.orarilido.ui.theme.CardDark
 import io.github.edoppiap.orarilido.schedule.Station
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -47,13 +49,16 @@ import org.json.JSONObject
 fun LineMap(
     stations: List<Station>,
     selectedStationId: String,
+    /** true = stile notturno (scuro). Lo decide il ciclo giorno/notte, non il tema dell'app. */
+    night: Boolean,
     bottomPadding: androidx.compose.ui.unit.Dp,
     onStationClick: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val dark = isSystemInDarkTheme()
-    val lineColor = MaterialTheme.colorScheme.primary
+    val dark = night
+    // Colori fissi legati allo stile della mappa (non al tema dell'app).
+    val lineColor = if (night) BlueDark else Blue
     val density = LocalDensity.current
 
     // Il tracciato (595 punti) si legge da assets in background, una volta sola.
@@ -111,20 +116,21 @@ fun LineMap(
                     false  // false = mostra anche l'etichetta col nome
                 },
             ) {
-                StationDot(selected)
+                StationDot(selected, night)
             }
         }
     }
 }
 
 @Composable
-private fun StationDot(selected: Boolean) {
-    val blue = MaterialTheme.colorScheme.primary
+private fun StationDot(selected: Boolean, night: Boolean) {
+    val blue = if (night) BlueDark else Blue
+    val fill = if (night) CardDark else Card
     val size = if (selected) 18.dp else 12.dp
     Box(
         Modifier
             .size(size)
-            .background(if (selected) blue else MaterialTheme.colorScheme.surface, CircleShape)
+            .background(if (selected) blue else fill, CircleShape)
             .border(3.dp, blue, CircleShape)
     )
 }

@@ -112,6 +112,7 @@ fun MainScreen(state: MainUiState, onSelectStation: (String) -> Unit) {
                     LineMap(
                         stations = state.stations,
                         selectedStationId = state.stationId,
+                        night = state.mapNight,
                         bottomPadding = sheetHeight,
                         onStationClick = onSelectStation,
                         modifier = Modifier.fillMaxSize(),
