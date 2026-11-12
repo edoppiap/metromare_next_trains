@@ -34,4 +34,14 @@ interface ScheduleProvider {
         now: LocalDateTime,
         count: Int = 3,
     ): List<Departure>
+
+    /**
+     * Tutti i passaggi della giornata di servizio [serviceDate], in ordine.
+     * Le corse dopo mezzanotte (es. 00:04) hanno la data del giorno dopo
+     * ma appartengono a questa giornata.
+     */
+    fun departuresForDay(stationId: String, direction: Direction, serviceDate: LocalDate): List<Departure>
+
+    /** Feriale, sabato o festivo: quale tabella vale in quella data. */
+    fun dayTypeOf(date: LocalDate): DayType
 }

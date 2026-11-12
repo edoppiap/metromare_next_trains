@@ -133,6 +133,29 @@ class TimetableScheduleProviderTest {
     }
 
     @Test
+    fun `giornata intera - quante corse`() {
+        val friday = LocalDate.of(2026, 11, 13)
+        val saturday = LocalDate.of(2026, 11, 14)
+        val sunday = LocalDate.of(2026, 11, 15)
+        val day = { s: String, d: Direction, date: LocalDate -> provider.departuresForDay(s, d, date) }
+        assertEquals(70, day("porta_san_paolo", Direction.TO_OSTIA, friday).size)
+        assertEquals(72, day("porta_san_paolo", Direction.TO_OSTIA, saturday).size)
+        assertEquals(56, day("porta_san_paolo", Direction.TO_OSTIA, sunday).size)
+        // Ad Acilia verso Roma, nei feriali, in più le 3 corse aggiuntive (in ordine).
+        val acilia = day("acilia", Direction.TO_ROMA, friday)
+        assertEquals(73, acilia.size)
+        assertEquals(acilia.sortedBy { it.time }, acilia)
+        // Capolinea d'arrivo: niente.
+        assertTrue(day("porta_san_paolo", Direction.TO_ROMA, friday).isEmpty())
+    }
+
+    @Test
+    fun `giornata intera - le corse dopo mezzanotte restano nel giorno di servizio`() {
+        val saturday = provider.departuresForDay("basilica_san_paolo", Direction.TO_ROMA, LocalDate.of(2026, 11, 14))
+        assertEquals(LocalDateTime.parse("2026-11-15T00:04"), saturday.last().time)
+    }
+
+    @Test
     fun `tipi di giornata`() {
         assertEquals(DayType.WEEKDAY, provider.dayTypeOf(LocalDate.of(2026, 11, 13)))
         assertEquals(DayType.SATURDAY, provider.dayTypeOf(LocalDate.of(2026, 11, 14)))

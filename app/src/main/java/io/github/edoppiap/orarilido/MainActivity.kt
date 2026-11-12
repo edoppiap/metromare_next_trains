@@ -10,11 +10,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import io.github.edoppiap.orarilido.ui.DayScreen
 import io.github.edoppiap.orarilido.ui.MainScreen
 import io.github.edoppiap.orarilido.ui.MainViewModel
 import io.github.edoppiap.orarilido.ui.theme.OrariTheme
@@ -32,20 +34,39 @@ class MainActivity : ComponentActivity() {
         setContent {
             OrariTheme {
                 val state by viewModel.state.collectAsState()
-                MainScreen(state, onSelectStation = viewModel::selectStation)
+                val day by viewModel.day.collectAsState()
+                // La giornata si apre SOPRA la schermata principale: così la mappa
+                // resta viva sotto e tornando indietro non va ricaricata.
+                Box {
+                    MainScreen(
+                        state,
+                        onSelectStation = viewModel::selectStation,
+                        onOpenDay = viewModel::openDay,
+                    )
+                    day?.let {
+                        DayScreen(
+                            it,
+                            onBack = viewModel::closeDay,
+                            onShiftDay = viewModel::shiftDay,
+                            onDirection = viewModel::setDayDirection,
+                        )
+                    }
+                }
             }
         }
 
         holdFirstFrameUntilReady()
 
-        // Aggiornamento: ogni 20 secondi, ma solo mentre l'app è visibile.
+        // Aggiornamento: ogni 20 secondi e allo scoccare di ogni minuto (così
+        // "tra 3 min" cambia puntuale), ma solo mentre l'app è visibile.
         // repeatOnLifecycle riparte da capo quando l'app torna in primo piano,
         // quindi c'è anche un aggiornamento immediato al ritorno.
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {
                     viewModel.refresh()
-                    delay(20_000)
+                    val toNextMinute = 60_000 - System.currentTimeMillis() % 60_000
+                    delay(minOf(20_000, toNextMinute + 50))  // +50 ms: per sicurezza oltre il minuto
                 }
             }
         }

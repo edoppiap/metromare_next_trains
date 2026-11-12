@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.edoppiap.orarilido.OrariApp
 import io.github.edoppiap.orarilido.schedule.Departure
+import io.github.edoppiap.orarilido.schedule.DayType
 import io.github.edoppiap.orarilido.schedule.Direction
 import io.github.edoppiap.orarilido.schedule.ScheduleProvider
 import io.github.edoppiap.orarilido.schedule.Station
@@ -14,10 +15,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.time.Duration
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
+import java.util.Locale
 import kotlin.math.abs
 
 // ---- Stato della schermata: tutto ciò che la UI deve disegnare, già "masticato" ----
@@ -47,6 +51,7 @@ data class StationCardUi(
 
 /** Una riga "Verso Roma" / "Verso Ostia" con i suoi prossimi treni. */
 data class DirectionBlock(
+    val direction: Direction,
     val title: String,       // "Verso Roma"
     val terminus: String,    // "Porta San Paolo"
     val rows: List<DepartureRow>,
@@ -113,6 +118,99 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             validFrom = p.validFrom.format(DATE),
             mapNight = SunTimes.isNight(ZonedDateTime.now(ROME)),
         )
+        if (dayRequest != null) buildDay()  // aggiorna anche "passati / prossimo" nella giornata
+    }
+
+    // ---- Schermata "giornata intera" ----
+
+    private val _day = MutableStateFlow<DayUi?>(null)
+    /** null = schermata chiusa. */
+    val day: StateFlow<DayUi?> = _day.asStateFlow()
+
+    private data class DayRequest(val stationId: String, val direction: Direction, val date: LocalDate)
+    private var dayRequest: DayRequest? = null
+
+    /** Apre gli orari di tutta la giornata di oggi, per una stazione e direzione. */
+    fun openDay(stationId: String, direction: Direction) {
+        dayRequest = DayRequest(stationId, direction, serviceToday())
+        buildDay()
+    }
+
+    fun closeDay() {
+        dayRequest = null
+        _day.value = null
+    }
+
+    /** Giorno precedente (−1) o successivo (+1). */
+    fun shiftDay(days: Long) {
+        dayRequest = dayRequest?.let { it.copy(date = it.date.plusDays(days)) }
+        buildDay()
+    }
+
+    fun setDayDirection(direction: Direction) {
+        dayRequest = dayRequest?.copy(direction = direction)
+        buildDay()
+    }
+
+    private fun buildDay() {
+        val p = provider ?: return
+        val req = dayRequest ?: return
+        val now = LocalDateTime.now(ROME).truncatedTo(ChronoUnit.MINUTES)
+        val departures = p.departuresForDay(req.stationId, req.direction, req.date)
+        // Il "prossimo treno" ha senso solo per la giornata in corso.
+        val next = if (req.date == serviceToday()) departures.firstOrNull { !it.time.isBefore(now) } else null
+
+        // Raggruppa per ora "di servizio": le corse dopo mezzanotte (ora 24)
+        // finiscono in fondo, etichettate "00".
+        val start = req.date.atStartOfDay()
+        val hours = departures
+            .groupBy { Duration.between(start, it.time).toHours() }
+            .toSortedMap()
+            .map { (hour, list) ->
+                HourRow(
+                    label = "%02d".format(hour % 24),
+                    cells = list.map { d ->
+                        MinuteCell(
+                            text = "%02d".format(d.time.minute),
+                            unconfirmed = d.unconfirmed,
+                            past = d.time.isBefore(now),
+                            next = d == next,
+                        )
+                    },
+                )
+            }
+
+        val today = serviceToday()
+        _day.value = DayUi(
+            stationName = p.stations.first { it.id == req.stationId }.name,
+            relativeDay = when (req.date) {
+                today -> "Oggi"
+                today.plusDays(1) -> "Domani"
+                today.minusDays(1) -> "Ieri"
+                else -> null
+            },
+            dateLabel = req.date.format(DAY_LABEL),
+            dayTypeLabel = when (p.dayTypeOf(req.date)) {
+                DayType.WEEKDAY -> "Orario feriale"
+                DayType.SATURDAY -> "Orario del sabato"
+                DayType.HOLIDAY -> "Orario festivo"
+            },
+            directions = DIRECTIONS
+                .filter { p.servesDirection(req.stationId, it.direction) }
+                .map { DirectionTab(it.direction, it.title) },
+            selectedDirection = req.direction,
+            hours = hours,
+            nextHourIndex = hours.indexOfFirst { h -> h.cells.any { it.next } }.coerceAtLeast(0),
+        )
+    }
+
+    /**
+     * La "giornata di servizio" in corso: fino alle 3 di notte valgono ancora
+     * le corse del giorno prima (gli ultimi treni passano dopo mezzanotte).
+     */
+    private fun serviceToday(): LocalDate {
+        val now = LocalDateTime.now(ROME)
+        return if (now.hour < 3) now.toLocalDate().minusDays(1) else now.toLocalDate()
     }
 
     /** Scelta manuale di una stazione: la mostriamo e la ricordiamo per il prossimo avvio. */
@@ -129,6 +227,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .filter { p.servesDirection(station.id, it.direction) }  // ai capolinea una sola direzione
             .map { d ->
                 DirectionBlock(
+                    direction = d.direction,
                     title = d.title,
                     terminus = d.terminus,
                     rows = p.nextDepartures(station.id, d.direction, now, ROWS_PER_DIRECTION)
@@ -164,6 +263,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val ROME: ZoneId = ZoneId.of("Europe/Rome")
         val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
         val DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("d/M/yyyy")
+        /** Es. "giovedì 12 novembre" */
+        val DAY_LABEL: DateTimeFormatter = DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.ITALIAN)
         val DIRECTIONS = listOf(
             DirectionInfo(Direction.TO_ROMA, "Verso Roma", "Porta San Paolo"),
             DirectionInfo(Direction.TO_OSTIA, "Verso Ostia", "Cristoforo Colombo"),

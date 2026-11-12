@@ -40,31 +40,40 @@ class TimetableScheduleProvider(private val timetable: Timetable) : ScheduleProv
         count: Int,
     ): List<Departure> {
         if (!servesDirection(stationId, direction)) return emptyList()
-        val stationIndex = indexOf(stationId)
-        val minutes = timetable.minutesFromTerminus.getValue(direction)
         // Si ragiona al minuto: un treno delle 08:00 viene mostrato
         // ("tra 0 min") fino alle 08:00:59.
         val from = now.truncatedTo(ChronoUnit.MINUTES)
 
         // Guardiamo tre giornate di servizio: ieri (per le corse dopo
         // mezzanotte), oggi, e domani (per il primo treno dopo l'ultimo).
-        val result = mutableListOf<Departure>()
-        for (dayOffset in -1L..1L) {
-            val day = from.toLocalDate().plusDays(dayOffset)
-            val trips = timetable.trips.getValue(dayTypeOf(day)).getValue(direction)
-            for (trip in trips) {
-                if (!passesThrough(trip, stationIndex, direction)) continue
+        return (-1L..1L)
+            .flatMap { departuresForDay(stationId, direction, from.toLocalDate().plusDays(it)) }
+            .filter { !it.time.isBefore(from) }
+            .sortedBy { it.time }
+            .take(count)
+    }
+
+    override fun departuresForDay(
+        stationId: String,
+        direction: Direction,
+        serviceDate: LocalDate,
+    ): List<Departure> {
+        if (!servesDirection(stationId, direction)) return emptyList()
+        val stationIndex = indexOf(stationId)
+        val minutes = timetable.minutesFromTerminus.getValue(direction)
+        val trips = timetable.trips.getValue(dayTypeOf(serviceDate)).getValue(direction)
+        return trips
+            .filter { passesThrough(it, stationIndex, direction) }
+            .map { trip ->
                 val minuteOfServiceDay =
                     trip.departureMinute + minutes[stationIndex] - minutes[trip.originIndex]
-                val time = day.atStartOfDay().plusMinutes(minuteOfServiceDay.toLong())
-                if (!time.isBefore(from)) result += Departure(time, trip.unconfirmed)
+                Departure(serviceDate.atStartOfDay().plusMinutes(minuteOfServiceDay.toLong()), trip.unconfirmed)
             }
-        }
-        return result.sortedBy { it.time }.take(count)
+            .sortedBy { it.time }  // le corse aggiuntive sono in coda alla lista: riordiniamo
     }
 
     /** Quale tabella vale in una certa data. */
-    fun dayTypeOf(date: LocalDate): DayType = when {
+    override fun dayTypeOf(date: LocalDate): DayType = when {
         date in timetable.holidays -> DayType.HOLIDAY
         date.dayOfWeek == DayOfWeek.SUNDAY -> DayType.HOLIDAY
         date.dayOfWeek == DayOfWeek.SATURDAY -> DayType.SATURDAY

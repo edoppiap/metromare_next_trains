@@ -49,6 +49,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import io.github.edoppiap.orarilido.schedule.Direction
 import io.github.edoppiap.orarilido.schedule.Station
 import io.github.edoppiap.orarilido.ui.theme.OrariTheme
 import kotlinx.coroutines.launch
@@ -57,12 +58,16 @@ import kotlinx.coroutines.launch
 /**
  * Schermata principale, stile Citymapper: mappa a tutto schermo e sopra
  * una tendina trascinabile. All'apertura la tendina è alta 1/3 dello
- * schermo e mostra la scheda della stazione; tirata su mostra più treni
- * e l'elenco delle stazioni.
+ * schermo e mostra la scheda della stazione; scorrendo, le altre stazioni.
+ * Tocco sugli orari di una scheda = orari di tutta la giornata.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(state: MainUiState, onSelectStation: (String) -> Unit) {
+fun MainScreen(
+    state: MainUiState,
+    onSelectStation: (String) -> Unit,
+    onOpenDay: (stationId: String, direction: Direction) -> Unit,
+) {
     if (!state.ready) return  // dura pochi ms: la finestra resta sullo sfondo
 
     val sheetState = rememberStandardBottomSheetState(initialValue = SheetValue.PartiallyExpanded)
@@ -83,13 +88,7 @@ fun MainScreen(state: MainUiState, onSelectStation: (String) -> Unit) {
             // Sfondo della tendina = sfondo dell'app; le schede sopra sono più chiare.
             sheetContainerColor = MaterialTheme.colorScheme.background,
             sheetContent = {
-                SheetContent(
-                    state = state,
-                    onSelectStation = { id ->
-                        onSelectStation(id)
-                        scope.launch { sheetState.partialExpand() }  // torna a 1/3 sulla nuova stazione
-                    },
-                )
+                SheetContent(state = state, onOpenDay = onOpenDay)
             },
         ) {
             // Il "corpo" dietro la tendina: la mappa, a TUTTO schermo, così si
@@ -126,10 +125,10 @@ fun MainScreen(state: MainUiState, onSelectStation: (String) -> Unit) {
 /**
  * Contenuto della tendina: una scheda per stazione, una sotto l'altra.
  * La prima è quella in primo piano (visibile con la tendina a 1/3);
- * per vedere le altre basta scorrere. Tocco su una scheda = la porta in primo piano.
+ * per vedere le altre basta scorrere.
  */
 @Composable
-private fun SheetContent(state: MainUiState, onSelectStation: (String) -> Unit) {
+private fun SheetContent(state: MainUiState, onOpenDay: (String, Direction) -> Unit) {
     val listState = rememberLazyListState()
     // Quando cambia la stazione in primo piano, torna in cima alla lista.
     LaunchedEffect(state.stationId) { listState.scrollToItem(0) }
@@ -147,7 +146,7 @@ private fun SheetContent(state: MainUiState, onSelectStation: (String) -> Unit) 
                 card = card,
                 primary = i == 0,
                 validFrom = state.validFrom,
-                onClick = { onSelectStation(card.stationId) },
+                onOpenDay = { direction -> onOpenDay(card.stationId, direction) },
             )
         }
     }
@@ -155,9 +154,9 @@ private fun SheetContent(state: MainUiState, onSelectStation: (String) -> Unit) 
 
 /** Riquadro con angoli smussati, colore "scheda" sopra lo sfondo della tendina. */
 @Composable
-private fun SheetCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+private fun SheetCard(content: @Composable () -> Unit) {
     Column(
-        modifier
+        Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
             .background(MaterialTheme.colorScheme.surface)
@@ -167,8 +166,13 @@ private fun SheetCard(modifier: Modifier = Modifier, content: @Composable () -> 
 
 /** Scheda di una stazione: nome come titolo, una riga per direzione. */
 @Composable
-private fun StationCard(card: StationCardUi, primary: Boolean, validFrom: String, onClick: () -> Unit) {
-    SheetCard(if (primary) Modifier else Modifier.clickable(onClick = onClick)) {
+private fun StationCard(
+    card: StationCardUi,
+    primary: Boolean,
+    validFrom: String,
+    onOpenDay: (Direction) -> Unit,
+) {
+    SheetCard {
         Text(
             card.name,
             modifier = Modifier.padding(bottom = 12.dp),
@@ -178,7 +182,7 @@ private fun StationCard(card: StationCardUi, primary: Boolean, validFrom: String
         )
         card.blocks.forEachIndexed { i, block ->
             if (i > 0) HorizontalDivider(Modifier.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.outlineVariant)
-            CompactDirectionRow(block)
+            CompactDirectionRow(block, onClick = { onOpenDay(block.direction) })
         }
         if (primary) {
             Text(
@@ -194,8 +198,15 @@ private fun StationCard(card: StationCardUi, primary: Boolean, validFrom: String
 /** [Verso Roma]   3 min    18 min    33 min
  *                 08:03    08:18     08:33   */
 @Composable
-private fun CompactDirectionRow(block: DirectionBlock) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun CompactDirectionRow(block: DirectionBlock, onClick: () -> Unit) {
+    // Tutta la riga è toccabile: apre gli orari della giornata per questa direzione.
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         DirectionPill(block.title, Modifier.width(112.dp))
         Spacer(Modifier.width(12.dp))
         block.rows.forEachIndexed { i, row ->
@@ -278,14 +289,15 @@ private fun MainScreenPreview() {
                 cards = listOf("acilia" to "Acilia", "vitinia" to "Vitinia").map { (id, name) ->
                     StationCardUi(
                         id, name, listOf(
-                            DirectionBlock("Verso Roma", "Porta San Paolo", roma),
-                            DirectionBlock("Verso Ostia", "Cristoforo Colombo", ostia),
+                            DirectionBlock(Direction.TO_ROMA, "Verso Roma", "Porta San Paolo", roma),
+                            DirectionBlock(Direction.TO_OSTIA, "Verso Ostia", "Cristoforo Colombo", ostia),
                         )
                     )
                 },
                 stations = listOf(Station("acilia", "Acilia", 0.0, 0.0), Station("vitinia", "Vitinia", 0.0, 0.0)),
             ),
             onSelectStation = {},
+            onOpenDay = { _, _ -> },
         )
     }
 }
