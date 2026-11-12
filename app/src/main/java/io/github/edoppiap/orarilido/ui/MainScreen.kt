@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -54,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import io.github.edoppiap.orarilido.data.PrimaryMode
+import io.github.edoppiap.orarilido.data.TravelMode
 import io.github.edoppiap.orarilido.schedule.Direction
 import io.github.edoppiap.orarilido.ui.theme.OrariTheme
 import kotlinx.coroutines.launch
@@ -72,6 +75,8 @@ fun MainScreen(
     onOpenDay: (stationId: String, direction: Direction) -> Unit,
     onModeChange: (PrimaryMode) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onTravelMode: (TravelMode) -> Unit,
+    onMenu: () -> Unit,
 ) {
     if (!state.ready) return  // dura pochi ms: la finestra resta sullo sfondo
 
@@ -79,6 +84,8 @@ fun MainScreen(
     val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    // Cerchi intorno all'utente: si nascondono/mostrano toccando il suo pallino.
+    var showCircles by rememberSaveable { mutableStateOf(true) }
 
     // Con la tendina alzata, "indietro" la riporta a 1/3 invece di chiudere l'app.
     BackHandler(enabled = sheetState.currentValue == SheetValue.Expanded) {
@@ -124,6 +131,9 @@ fun MainScreen(
                         bottomPadding = sheetHeight,
                         userLocation = state.userLocation,
                         nearestStation = state.nearestStation,
+                        travelMode = state.travelMode,
+                        showCircles = showCircles,
+                        onUserClick = { showCircles = !showCircles },
                         // Tocco su una stazione della mappa: la tendina scorre alla sua scheda.
                         onStationClick = { id ->
                             val index = sheetItems(state).indexOfFirst { it is SheetItem.Card && it.card.stationId == id }
@@ -131,6 +141,19 @@ fun MainScreen(
                         },
                         modifier = Modifier.fillMaxSize(),
                     )
+                }
+                // Pulsanti sopra la mappa: menu a sinistra, a piedi/in bici a destra.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    MapButton(onClick = onMenu) { MenuIcon(MaterialTheme.colorScheme.onSurface) }
+                    Spacer(Modifier.weight(1f))
+                    // Il selettore serve solo quando ci sono i cerchi (posizione nota e cerchi accesi).
+                    if (state.userLocation != null && showCircles) TravelToggle(state.travelMode, onTravelMode)
                 }
             }
         }
@@ -440,7 +463,44 @@ private fun MainScreenPreview() {
                 primaryCards = listOf(card("acilia", "Acilia", true)),
                 otherCards = listOf(card("vitinia", "Vitinia", false)),
             ),
-            onOpenDay = { _, _ -> }, onModeChange = {}, onToggleFavorite = {},
+            onOpenDay = { _, _ -> }, onModeChange = {}, onToggleFavorite = {}, onTravelMode = {}, onMenu = {},
         )
+    }
+}
+
+/** Pulsante tondo sopra la mappa. */
+@Composable
+private fun MapButton(onClick: () -> Unit, content: @Composable () -> Unit) {
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { content() }
+}
+
+/** Selettore 🚶 | 🚲: cambia la grandezza dei cerchi sulla mappa. */
+@Composable
+private fun TravelToggle(mode: TravelMode, onChange: (TravelMode) -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(colors.surface)
+            .padding(3.dp),
+    ) {
+        listOf(TravelMode.WALK to "🚶", TravelMode.BIKE to "🚲").forEach { (m, emoji) ->
+            Text(
+                emoji,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .then(if (m == mode) Modifier.background(colors.primary) else Modifier)
+                    .clickable { onChange(m) }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                fontSize = 18.sp,
+            )
+        }
     }
 }

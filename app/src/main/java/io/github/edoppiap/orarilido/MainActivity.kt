@@ -15,11 +15,16 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import io.github.edoppiap.orarilido.location.LocationSource
 import io.github.edoppiap.orarilido.ui.DayScreen
+import io.github.edoppiap.orarilido.ui.InfoPage
+import io.github.edoppiap.orarilido.ui.InfoScreen
 import io.github.edoppiap.orarilido.ui.MainScreen
 import io.github.edoppiap.orarilido.ui.MainViewModel
 import io.github.edoppiap.orarilido.ui.theme.OrariTheme
@@ -51,6 +56,8 @@ class MainActivity : ComponentActivity() {
             OrariTheme {
                 val state by viewModel.state.collectAsState()
                 val day by viewModel.day.collectAsState()
+                // Pagina del menu aperta (null = chiuso). "Saveable": sopravvive alla rotazione.
+                var infoPage by rememberSaveable { mutableStateOf<InfoPage?>(null) }
                 // La giornata si apre SOPRA la schermata principale: così la mappa
                 // resta viva sotto e tornando indietro non va ricaricata.
                 Box {
@@ -59,6 +66,8 @@ class MainActivity : ComponentActivity() {
                         onOpenDay = viewModel::openDay,
                         onModeChange = viewModel::setMode,
                         onToggleFavorite = viewModel::toggleFavorite,
+                        onTravelMode = viewModel::setTravelMode,
+                        onMenu = { infoPage = InfoPage.MENU },
                     )
                     day?.let {
                         DayScreen(
@@ -68,6 +77,7 @@ class MainActivity : ComponentActivity() {
                             onDirection = viewModel::setDayDirection,
                         )
                     }
+                    infoPage?.let { InfoScreen(it, onNavigate = { page -> infoPage = page }) }
                 }
             }
         }

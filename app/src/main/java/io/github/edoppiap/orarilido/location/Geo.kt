@@ -21,6 +21,9 @@ object Geo {
     /** Velocità a piedi usata per i cerchi "5/10/15 minuti": ~4,8 km/h. */
     const val WALK_METERS_PER_MINUTE = 80.0
 
+    /** In bici, andatura tranquilla: ~15 km/h. */
+    const val BIKE_METERS_PER_MINUTE = 250.0
+
     fun distanceMeters(a: GeoPoint, b: GeoPoint): Double {
         val dLat = Math.toRadians(b.lat - a.lat)
         val dLon = Math.toRadians(b.lon - a.lon)

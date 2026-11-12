@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -33,12 +34,15 @@ import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberUpdatedMarkerState
 import io.github.edoppiap.orarilido.R
+import io.github.edoppiap.orarilido.data.TravelMode
 import io.github.edoppiap.orarilido.location.Geo
 import io.github.edoppiap.orarilido.location.GeoPoint
 import io.github.edoppiap.orarilido.ui.theme.Blue
 import io.github.edoppiap.orarilido.ui.theme.BlueDark
 import io.github.edoppiap.orarilido.ui.theme.Card
 import io.github.edoppiap.orarilido.ui.theme.CardDark
+import io.github.edoppiap.orarilido.ui.theme.Ink
+import io.github.edoppiap.orarilido.ui.theme.InkDark
 import io.github.edoppiap.orarilido.schedule.Station
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -60,6 +64,11 @@ fun LineMap(
     /** Posizione dell'utente (null = sconosciuta) e stazione più vicina, per lo zoom. */
     userLocation: GeoPoint?,
     nearestStation: Station?,
+    /** A piedi o in bici: decide la grandezza dei cerchi. */
+    travelMode: TravelMode,
+    /** Cerchi visibili? Si accendono/spengono toccando il pallino dell'utente. */
+    showCircles: Boolean,
+    onUserClick: () -> Unit,
     bottomPadding: androidx.compose.ui.unit.Dp,
     onStationClick: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -77,6 +86,9 @@ fun LineMap(
 
     val cameraState = rememberCameraPositionState()
     var mapLoaded by remember { mutableStateOf(false) }
+    // I nomi delle stazioni compaiono solo con uno zoom abbastanza vicino,
+    // altrimenti con la linea intera si sovrapporrebbero.
+    val showNames by remember { derivedStateOf { cameraState.position.zoom >= NAMES_MIN_ZOOM } }
 
     // Primo caricamento: inquadra tutta la linea (tutte le stazioni).
     LaunchedEffect(mapLoaded) {
@@ -147,13 +159,29 @@ fun LineMap(
             ) {
                 StationDot(selected, night)
             }
+            if (showNames) {
+                // Etichetta col nome: il bordo sinistro sta sul pallino, il testo parte
+                // un po' più a destra (padding), così non lo copre.
+                MarkerComposable(
+                    keys = arrayOf<Any>("name", s.id, selected, dark),
+                    state = rememberUpdatedMarkerState(LatLng(s.lat, s.lon)),
+                    anchor = androidx.compose.ui.geometry.Offset(0f, 0.5f),
+                    zIndex = 0.8f,
+                    onClick = { onStationClick(s.id); true },
+                ) {
+                    StationName(s.name, selected, night)
+                }
+            }
         }
 
-        // Posizione dell'utente: cerchi 5/10/15 minuti a piedi e pallino.
+        // Posizione dell'utente: cerchi 5/10/15 minuti (a piedi o in bici) e pallino.
         userLocation?.let { user ->
             val center = LatLng(user.lat, user.lon)
-            WALK_MINUTES.forEach { minutes ->
-                val radius = minutes * Geo.WALK_METERS_PER_MINUTE
+            val metersPerMinute =
+                if (travelMode == TravelMode.BIKE) Geo.BIKE_METERS_PER_MINUTE else Geo.WALK_METERS_PER_MINUTE
+            val emoji = if (travelMode == TravelMode.BIKE) "🚲" else "🚶"
+            if (showCircles) WALK_MINUTES.forEach { minutes ->
+                val radius = minutes * metersPerMinute
                 Circle(
                     center = center,
                     radius = radius,
@@ -163,12 +191,12 @@ fun LineMap(
                 )
                 // Etichetta "5 min" in cima al cerchio (1° di latitudine ≈ 111 km).
                 MarkerComposable(
-                    keys = arrayOf<Any>("walk", minutes, dark),
+                    keys = arrayOf<Any>("walk", minutes, dark, travelMode),
                     state = rememberUpdatedMarkerState(LatLng(user.lat + radius / 111_320.0, user.lon)),
                     anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
                     zIndex = 0.5f,
                 ) {
-                    WalkLabel("$minutes min", night)
+                    WalkLabel("$emoji $minutes min", night)
                 }
             }
             MarkerComposable(
@@ -176,6 +204,7 @@ fun LineMap(
                 state = rememberUpdatedMarkerState(center),
                 anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
                 zIndex = 3f,
+                onClick = { onUserClick(); true },  // true = niente etichetta
             ) {
                 UserDot(night)
             }
@@ -206,11 +235,13 @@ private fun loadLine(context: Context): List<LatLng> {
     }
 }
 
-/** Cerchi intorno all'utente: minuti a piedi. */
+/** Cerchi intorno all'utente: minuti a piedi o in bici. */
 private val WALK_MINUTES = listOf(5, 10, 15)
 /** Oltre questa distanza dalla stazione più vicina, niente zoom automatico. */
 private const val MAX_ZOOM_DISTANCE_M = 30_000.0
 private const val MAX_ZOOM = 16f
+/** Da questo zoom in su compaiono i nomi delle stazioni (13 ≈ quartiere). */
+private const val NAMES_MIN_ZOOM = 13f
 
 /** Pallino blu con bordo bianco: "tu sei qui". */
 @Composable
@@ -234,5 +265,20 @@ private fun WalkLabel(text: String, night: Boolean) {
         fontSize = 11.sp,
         fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
         color = if (night) BlueDark else Blue,
+    )
+}
+
+/** Nome della stazione accanto al pallino, su fondino arrotondato. */
+@Composable
+private fun StationName(name: String, selected: Boolean, night: Boolean) {
+    androidx.compose.material3.Text(
+        name,
+        modifier = Modifier
+            .padding(start = 14.dp)
+            .background(if (night) CardDark else Card, androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+        fontSize = 12.sp,
+        fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.SemiBold,
+        color = if (night) InkDark else Ink,
     )
 }

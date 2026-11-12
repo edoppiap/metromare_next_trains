@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.edoppiap.orarilido.OrariApp
 import io.github.edoppiap.orarilido.data.PrimaryMode
+import io.github.edoppiap.orarilido.data.TravelMode
 import io.github.edoppiap.orarilido.location.Geo
 import io.github.edoppiap.orarilido.location.GeoPoint
 import io.github.edoppiap.orarilido.schedule.Departure
@@ -49,6 +50,8 @@ data class MainUiState(
     val userLocation: GeoPoint? = null,
     /** La stazione più vicina all'utente, per lo zoom della mappa. */
     val nearestStation: Station? = null,
+    /** A piedi o in bici: grandezza dei cerchi sulla mappa. */
+    val travelMode: TravelMode = TravelMode.WALK,
 )
 
 /** La scheda di una stazione: nome e una riga per ogni direzione servita. */
@@ -97,6 +100,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var stationId: String? = null
     private var favorites: Set<String> = emptySet()
     private var mode: PrimaryMode = PrimaryMode.NEAREST
+    private var travelMode: TravelMode = TravelMode.WALK
     /** Ultima posizione nota: SOLO in memoria, mai salvata (privacy). */
     private var userLocation: GeoPoint? = null
 
@@ -112,6 +116,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             stationId = saved.lastStationId?.takeIf { it in validIds } ?: p.stations.first().id
             favorites = saved.favorites intersect validIds
             mode = saved.mode
+            travelMode = saved.travelMode
             // Se il GPS ha già risposto mentre caricavamo, usiamo subito la posizione.
             userLocation?.let { onLocation(it) } ?: refresh()
         }
@@ -156,6 +161,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             mapNight = SunTimes.isNight(ZonedDateTime.now(ROME)),
             userLocation = user,
             nearestStation = if (user != null) byDistance.first() else null,
+            travelMode = travelMode,
         )
         if (dayRequest != null) buildDay()  // aggiorna anche "passati / prossimo" nella giornata
     }
@@ -180,6 +186,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         mode = newMode
         refresh()
         viewModelScope.launch { orariApp.stationPrefs.setMode(newMode) }
+    }
+
+    /** Selettore 🚶 | 🚲 sulla mappa. La scelta viene ricordata. */
+    fun setTravelMode(newMode: TravelMode) {
+        travelMode = newMode
+        refresh()
+        viewModelScope.launch { orariApp.stationPrefs.setTravelMode(newMode) }
     }
 
     /** Stella su una scheda: aggiunge o toglie la stazione dalle preferite. */
