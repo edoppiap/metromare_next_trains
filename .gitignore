@@ -21,3 +21,6 @@ local.properties
 
 # Orario ufficiale in PDF: solo riferimento locale, non pubblicato
 Metromare.pdf
+
+# Istruzioni private per Claude Code
+CLAUDE.md
