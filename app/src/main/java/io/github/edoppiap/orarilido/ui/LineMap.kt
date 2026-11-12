@@ -11,6 +11,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -48,6 +52,7 @@ import io.github.edoppiap.orarilido.R
 import io.github.edoppiap.orarilido.data.TravelMode
 import io.github.edoppiap.orarilido.location.Geo
 import io.github.edoppiap.orarilido.location.GeoPoint
+import io.github.edoppiap.orarilido.location.rememberHeading
 import io.github.edoppiap.orarilido.ui.theme.Blue
 import io.github.edoppiap.orarilido.ui.theme.BlueDark
 import io.github.edoppiap.orarilido.ui.theme.Card
@@ -105,6 +110,15 @@ fun LineMap(
     val showNames by remember { derivedStateOf { cameraState.position.zoom >= NAMES_MIN_ZOOM } }
     // Stazione toccata con lo zoom lontano: il suo nome compare per qualche secondo.
     var revealedId by remember { mutableStateOf<String?>(null) }
+    // Ultima stazione rivelata: resta disegnata durante la dissolvenza in uscita.
+    var lastRevealedId by remember { mutableStateOf<String?>(null) }
+    // Dissolvenze: nomi per zoom (0,5 s) e nome rivelato (entra in 0,2 s, esce in 0,8 s).
+    val namesAlpha by animateFloatAsState(if (showNames) 1f else 0f, tween(500), label = "names")
+    val revealAlpha by animateFloatAsState(
+        if (revealedId != null) 1f else 0f,
+        tween(if (revealedId != null) 200 else 800),
+        label = "reveal",
+    )
     LaunchedEffect(revealedId) {
         if (revealedId != null) {
             delay(NAME_REVEAL_MS)
@@ -159,6 +173,9 @@ fun LineMap(
         if (cameraState.position.zoom > MAX_ZOOM) cameraState.animate(CameraUpdateFactory.zoomTo(MAX_ZOOM), 300)
     }
 
+    // Direzione in cui punta il telefono (null = sensore assente o posizione ignota).
+    val heading by rememberHeading(userLocation)
+
     // ---- Pulsante "centra": ogni tocco passa all'inquadratura successiva ----
     var recenterStep by remember { mutableIntStateOf(0) }
     var followingUser by remember { mutableStateOf(false) }
@@ -170,15 +187,17 @@ fun LineMap(
         }
     }
     val scope = rememberCoroutineScope()
+    val primary = stations.filter { it.id in highlightedIds }
+    // Le inquadrature disponibili dipendono da cosa sappiamo.
+    val targets = buildList {
+        if (userLocation != null) add(RecenterTarget.USER)
+        if (primary.isNotEmpty()) add(if (userLocation != null) RecenterTarget.USER_AND_PRIMARY else RecenterTarget.PRIMARY)
+        add(RecenterTarget.LINE)
+    }
+    // Cosa farà il PROSSIMO tocco: l'icona del pulsante lo mostra.
+    val nextTarget = targets[recenterStep % targets.size]
     val onRecenter: () -> Unit = {
-        val primary = stations.filter { it.id in highlightedIds }
-        // Le inquadrature disponibili dipendono da cosa sappiamo.
-        val targets = buildList {
-            if (userLocation != null) add(RecenterTarget.USER)
-            if (primary.isNotEmpty()) add(if (userLocation != null) RecenterTarget.USER_AND_PRIMARY else RecenterTarget.PRIMARY)
-            add(RecenterTarget.LINE)
-        }
-        val target = targets[recenterStep % targets.size]
+        val target = nextTarget
         recenterStep++
         followingUser = target == RecenterTarget.USER
         val margin = with(density) { 72.dp.roundToPx() }
@@ -241,12 +260,14 @@ fun LineMap(
                     onClick = {
                         onStationClick(s.id)
                         revealedId = s.id
+                    lastRevealedId = s.id
                         true  // true = niente fumetto di Google: usiamo la nostra etichetta
                     },
                 ) {
                     StationDot(selected, night)
                 }
-                if (showNames || s.id == revealedId) {
+                val nameAlpha = maxOf(namesAlpha, if (s.id == lastRevealedId) revealAlpha else 0f)
+                if (nameAlpha > 0.01f) {
                     // Etichetta col nome: il bordo sinistro sta sul pallino, il testo parte
                     // un po' più a destra (padding), così non lo copre.
                     MarkerComposable(
@@ -254,6 +275,7 @@ fun LineMap(
                         state = rememberUpdatedMarkerState(LatLng(s.lat, s.lon)),
                         anchor = androidx.compose.ui.geometry.Offset(0f, 0.5f),
                         zIndex = 0.8f,
+                        alpha = nameAlpha,
                         onClick = { onStationClick(s.id); true },
                     ) {
                         StationName(s.name, selected, night)
@@ -299,7 +321,15 @@ fun LineMap(
         }
         // Bussola: compare solo se la mappa è ruotata; tocco = nord in alto.
         val bearing = cameraState.position.bearing
-        if (bearing != 0f) {
+        // Compare subito, sparisce con calma: attesa di 0,8 s e dissolvenza di 0,6 s.
+        AnimatedVisibility(
+            visible = bearing != 0f,
+            enter = fadeIn(tween(200)),
+            exit = fadeOut(tween(durationMillis = 600, delayMillis = 800)),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 12.dp, bottom = bottomPadding + 12.dp + 44.dp + 10.dp),
+        ) {
             CompassButton(
                 bearing = bearing,
                 night = night,
@@ -314,13 +344,11 @@ fun LineMap(
                         )
                     }
                 },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 12.dp, bottom = bottomPadding + 12.dp + 44.dp + 10.dp),
             )
         }
         // In basso a destra, appena sopra la tendina.
         RecenterButton(
+            next = nextTarget,
             active = followingUser,
             night = night,
             onClick = onRecenter,
@@ -360,7 +388,7 @@ private val WALK_MINUTES = listOf(5, 10, 15)
 private const val MAX_ZOOM_DISTANCE_M = 30_000.0
 private const val MAX_ZOOM = 16f
 /** Per quanto resta visibile il nome di una stazione toccata da lontano. */
-private const val NAME_REVEAL_MS = 3_000L
+private const val NAME_REVEAL_MS = 4_000L
 /** Da questo zoom in su compaiono i nomi delle stazioni (13 ≈ quartiere). */
 private const val NAMES_MIN_ZOOM = 13f
 
@@ -410,9 +438,19 @@ private enum class RecenterTarget { USER, USER_AND_PRIMARY, PRIMARY, LINE }
 /** Zoom "di quartiere" per centrare su di te o su una stazione. */
 private const val USER_ZOOM = 16f
 
-/** Pulsante tondo con l'icona "centra"; blu quando la mappa è centrata su di te. */
+/**
+ * Pulsante "centra". L'icona mostra cosa succede al prossimo tocco:
+ *   mirino = su di te · due punti = tu + stazione · un punto = stazione · linea = tutta la linea.
+ * Blu quando la mappa è centrata su di te.
+ */
 @Composable
-private fun RecenterButton(active: Boolean, night: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun RecenterButton(
+    next: RecenterTarget,
+    active: Boolean,
+    night: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val blue = if (night) BlueDark else Blue
     Box(
         modifier
@@ -422,7 +460,11 @@ private fun RecenterButton(active: Boolean, night: Boolean, onClick: () -> Unit,
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        RecenterIcon(if (active) blue else if (night) InkDark else Ink)
+        val color = if (active) blue else if (night) InkDark else Ink
+        // Crossfade: quando cambia, la vecchia icona sfuma nella nuova.
+        Crossfade(targetState = next, animationSpec = tween(250), label = "recenterIcon") { target ->
+            if (target == RecenterTarget.USER) RecenterIcon(color) else FitIcon(target, color)
+        }
     }
 }
 
@@ -475,6 +517,62 @@ private fun CompassButton(bearing: Float, night: Boolean, onClick: () -> Unit, m
                 drawPath(north, androidx.compose.ui.graphics.Color(0xFFE03A3E))
                 drawPath(south, grey.copy(alpha = 0.6f))
             }
+        }
+    }
+}
+
+/** Ventaglio sfumato che parte dal centro e punta in alto (verso il nord del marker). */
+@Composable
+private fun HeadingCone(night: Boolean) {
+    val blue = if (night) BlueDark else Blue
+    androidx.compose.foundation.Canvas(Modifier.size(72.dp)) {
+        drawArc(
+            brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                colors = listOf(blue.copy(alpha = 0.55f), blue.copy(alpha = 0f)),
+                center = center,
+                radius = size.minDimension / 2,
+            ),
+            startAngle = -90f - 30f,  // −90° = verso l'alto; apertura di 60°
+            sweepAngle = 60f,
+            useCenter = true,
+        )
+    }
+}
+
+/**
+ * Icone "inquadra": quattro angoli di cornice e, dentro, cosa verrà inquadrato
+ * (tu + stazione, la stazione, oppure un tratto di linea).
+ */
+@Composable
+private fun FitIcon(target: RecenterTarget, color: androidx.compose.ui.graphics.Color) {
+    androidx.compose.foundation.Canvas(Modifier.size(22.dp)) {
+        val s = size.minDimension
+        val stroke = 2.dp.toPx()
+        val k = s * 0.28f  // lunghezza dei tratti degli angoli
+        val cap = androidx.compose.ui.graphics.StrokeCap.Round
+        fun line(x1: Float, y1: Float, x2: Float, y2: Float, w: Float = stroke) = drawLine(
+            color, androidx.compose.ui.geometry.Offset(x1, y1), androidx.compose.ui.geometry.Offset(x2, y2), w, cap,
+        )
+        // Cornice: quattro angoli
+        line(0f, 0f, k, 0f); line(0f, 0f, 0f, k)
+        line(s, 0f, s - k, 0f); line(s, 0f, s, k)
+        line(0f, s, k, s); line(0f, s, 0f, s - k)
+        line(s, s, s - k, s); line(s, s, s, s - k)
+        val ring = androidx.compose.ui.graphics.drawscope.Stroke(stroke * 0.9f)
+        when (target) {
+            RecenterTarget.USER_AND_PRIMARY -> {
+                drawCircle(color, s * 0.10f, androidx.compose.ui.geometry.Offset(s * 0.34f, s * 0.64f))  // tu
+                drawCircle(color, s * 0.11f, androidx.compose.ui.geometry.Offset(s * 0.66f, s * 0.36f), style = ring)  // stazione
+            }
+            RecenterTarget.PRIMARY ->
+                drawCircle(color, s * 0.14f, center, style = ring)
+            RecenterTarget.LINE -> {
+                line(s * 0.28f, s * 0.72f, s * 0.72f, s * 0.28f, stroke * 0.9f)
+                listOf(0.28f, 0.5f, 0.72f).forEach { t ->
+                    drawCircle(color, s * 0.07f, androidx.compose.ui.geometry.Offset(s * t, s * (1f - t)))
+                }
+            }
+            RecenterTarget.USER -> Unit
         }
     }
 }

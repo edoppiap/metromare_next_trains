@@ -12,10 +12,18 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
@@ -69,15 +77,45 @@ class MainActivity : ComponentActivity() {
                         onTravelMode = viewModel::setTravelMode,
                         onMenu = { infoPage = InfoPage.MENU },
                     )
-                    day?.let {
-                        DayScreen(
-                            it,
-                            onBack = viewModel::closeDay,
-                            onShiftDay = viewModel::shiftDay,
-                            onDirection = viewModel::setDayDirection,
-                        )
+                    // Giornata: entra da destra. "lastDay" la tiene disegnata mentre esce.
+                    var lastDay by remember { mutableStateOf(day) }
+                    if (day != null) lastDay = day
+                    AnimatedVisibility(
+                        visible = day != null,
+                        enter = slideInHorizontally { it } + fadeIn(),
+                        exit = slideOutHorizontally { it } + fadeOut(),
+                    ) {
+                        lastDay?.let {
+                            DayScreen(
+                                it,
+                                onBack = viewModel::closeDay,
+                                onShiftDay = viewModel::shiftDay,
+                                onDirection = viewModel::setDayDirection,
+                            )
+                        }
                     }
-                    infoPage?.let { InfoScreen(it, onNavigate = { page -> infoPage = page }) }
+
+                    // Menu: entra da sinistra (dove sta il pulsante ☰) e lì ritorna.
+                    var lastPage by remember { mutableStateOf(infoPage) }
+                    if (infoPage != null) lastPage = infoPage
+                    AnimatedVisibility(
+                        visible = infoPage != null,
+                        enter = slideInHorizontally { -it } + fadeIn(),
+                        exit = slideOutHorizontally { -it } + fadeOut(),
+                    ) {
+                        // Tra le pagine del menu: avanti = da destra, indietro = verso destra.
+                        AnimatedContent(
+                            targetState = lastPage ?: InfoPage.MENU,
+                            transitionSpec = {
+                                val forward = initialState == InfoPage.MENU
+                                (slideInHorizontally { if (forward) it else -it } + fadeIn()) togetherWith
+                                    (slideOutHorizontally { if (forward) -it / 3 else it } + fadeOut())
+                            },
+                            label = "infoPages",
+                        ) { page ->
+                            InfoScreen(page, onNavigate = { infoPage = it })
+                        }
+                    }
                 }
             }
         }

@@ -247,31 +247,14 @@ private fun PrimaryHeader(mode: PrimaryMode, onModeChange: (PrimaryMode) -> Unit
     }
 }
 
-/** Selettore a due segmenti, quello attivo pieno di blu. */
+/** Selettore a due segmenti: la pillola blu scivola sotto quello scelto. */
 @Composable
 private fun ModeToggle(mode: PrimaryMode, onModeChange: (PrimaryMode) -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(colors.surface)
-            .padding(3.dp),
-    ) {
-        listOf(PrimaryMode.NEAREST to "📍 Vicina", PrimaryMode.FAVORITES to "★ Preferite").forEach { (m, label) ->
-            val selected = m == mode
-            Text(
-                label,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .then(if (selected) Modifier.background(colors.primary) else Modifier)
-                    .clickable { onModeChange(m) }
-                    .padding(horizontal = 12.dp, vertical = 5.dp),
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = if (selected) colors.onPrimary else colors.onSurfaceVariant,
-            )
-        }
-    }
+    SegmentedToggle(
+        options = listOf(PrimaryMode.NEAREST to "📍 Vicina", PrimaryMode.FAVORITES to "★ Preferite"),
+        selected = mode,
+        onSelect = onModeChange,
+    )
 }
 
 /** Mostrato in "Preferite" quando non ce n'è ancora nessuna. */
@@ -484,23 +467,10 @@ private fun MapButton(onClick: () -> Unit, content: @Composable () -> Unit) {
 /** Selettore 🚶 | 🚲: cambia la grandezza dei cerchi sulla mappa. */
 @Composable
 private fun TravelToggle(mode: TravelMode, onChange: (TravelMode) -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(colors.surface)
-            .padding(3.dp),
-    ) {
-        listOf(TravelMode.WALK to "🚶", TravelMode.BIKE to "🚲").forEach { (m, emoji) ->
-            Text(
-                emoji,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .then(if (m == mode) Modifier.background(colors.primary) else Modifier)
-                    .clickable { onChange(m) }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                fontSize = 18.sp,
-            )
-        }
-    }
+    SegmentedToggle(
+        options = listOf(TravelMode.WALK to "🚶", TravelMode.BIKE to "🚲"),
+        selected = mode,
+        onSelect = onChange,
+        fontSize = 18.sp,
+    )
 }

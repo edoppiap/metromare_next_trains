@@ -121,26 +121,15 @@ fun DayScreen(
             IconButton(onClick = { onShiftDay(1) }) { Chevron(colors.primary, pointsLeft = false) }
         }
 
-        // Direzioni: pillole, quella scelta è piena
-        Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            day.directions.forEach { tab ->
-                val selected = tab.direction == day.selectedDirection
-                Text(
-                    tab.title,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .then(
-                            if (selected) Modifier.background(colors.primary)
-                            else Modifier.border(1.dp, colors.outlineVariant, RoundedCornerShape(50))
-                        )
-                        .clickable { onDirection(tab.direction) }
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                    color = if (selected) colors.onPrimary else colors.onSurface,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                )
-            }
-        }
+        // Direzioni: selettore con la pillola blu che scivola sotto quella scelta.
+        SegmentedToggle(
+            options = day.directions.map { it.direction to it.title },
+            selected = day.selectedDirection,
+            onSelect = onDirection,
+            modifier = Modifier.padding(bottom = 8.dp),
+            fontSize = 14.sp,
+            segmentPadding = 14.dp,
+        )
 
         // Tabella: una riga per ora, dentro una scheda
         LazyColumn(
