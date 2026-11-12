@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.edoppiap.orarilido.OrariApp
+import io.github.edoppiap.orarilido.data.PrimaryMode
 import io.github.edoppiap.orarilido.schedule.Departure
 import io.github.edoppiap.orarilido.schedule.DayType
 import io.github.edoppiap.orarilido.schedule.Direction
@@ -28,13 +29,15 @@ import kotlin.math.abs
 
 data class MainUiState(
     val ready: Boolean = false,
-    /** La stazione in primo piano (la prima scheda, evidenziata sulla mappa). */
-    val stationId: String = "",
-    /**
-     * Una scheda per stazione: la prima è quella in primo piano, poi le
-     * altre in ordine di vicinanza sulla linea (fase 4: distanza dall'utente).
-     */
-    val cards: List<StationCardUi> = emptyList(),
+    /** Cosa c'è "In primo piano": la stazione più vicina o le preferite. */
+    val mode: PrimaryMode = PrimaryMode.NEAREST,
+    /** Schede della sezione "In primo piano" (vuota se Preferite e nessuna preferita). */
+    val primaryCards: List<StationCardUi> = emptyList(),
+    /** Schede di tutte le altre stazioni, per distanza (per ora: fermate sulla linea). */
+    val otherCards: List<StationCardUi> = emptyList(),
+    /** Stazioni evidenziate sulla mappa = quelle in primo piano. */
+    val highlightedIds: Set<String> = emptySet(),
+    val favorites: Set<String> = emptySet(),
     val stations: List<Station> = emptyList(),
     /** Es. "9/11/2026": data di inizio validità dell'orario in uso. */
     val validFrom: String = "",
@@ -46,6 +49,7 @@ data class MainUiState(
 data class StationCardUi(
     val stationId: String,
     val name: String,
+    val favorite: Boolean,
     val blocks: List<DirectionBlock>,
 )
 
@@ -78,47 +82,78 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<MainUiState> = _state.asStateFlow()
 
     private var provider: ScheduleProvider? = null
+    /**
+     * La stazione "vicina". Finché non c'è il GPS (fase 4) è l'ultima usata;
+     * serve anche come riferimento per ordinare le altre schede.
+     */
     private var stationId: String? = null
+    private var favorites: Set<String> = emptySet()
+    private var mode: PrimaryMode = PrimaryMode.NEAREST
 
     init {
         viewModelScope.launch {
             // Questi due caricamenti sono già partiti in OrariApp.onCreate:
             // qui aspettiamo solo che finiscano (di solito pochi millisecondi).
             val p = orariApp.schedule.await()
-            val saved = orariApp.savedStationId.await()
+            val saved = orariApp.savedPrefs.await()
             provider = p
-            // Se la stazione salvata non esiste più (orario cambiato), si usa la prima.
-            stationId = saved?.takeIf { id -> p.stations.any { it.id == id } }
-                ?: p.stations.first().id
+            val validIds = p.stations.map { it.id }.toSet()
+            // Se una stazione salvata non esiste più (orario cambiato), la ignoriamo.
+            stationId = saved.lastStationId?.takeIf { it in validIds } ?: p.stations.first().id
+            favorites = saved.favorites intersect validIds
+            mode = saved.mode
             refresh()
         }
     }
 
-    /** Ricalcola i prossimi treni rispetto all'ora attuale. */
+    /** Ricalcola schede e prossimi treni rispetto all'ora attuale. */
     fun refresh() {
         val p = provider ?: return
         val id = stationId ?: return
         val now = LocalDateTime.now(ROME)
 
-        // Ordine delle schede: prima la stazione in primo piano, poi le altre
-        // per numero di fermate di distanza (a parità, prima quella verso Roma).
-        val selectedIndex = p.stations.indexOfFirst { it.id == id }
-        val ordered = p.stations.withIndex()
-            .sortedWith(compareBy({ abs(it.index - selectedIndex) }, { it.index }))
+        // Distanza "in fermate" dalla stazione di riferimento (fase 4: in metri dall'utente).
+        val refIndex = p.stations.indexOfFirst { it.id == id }
+        val byDistance = p.stations.withIndex()
+            .sortedWith(compareBy({ abs(it.index - refIndex) }, { it.index }))
             .map { it.value }
 
-        // 14 stazioni × 2 direzioni × 3 treni: calcolo di pochi microsecondi.
-        val cards = ordered.map { station -> buildCard(p, station, now) }
+        // In primo piano: la stazione vicina, oppure le preferite (in ordine di distanza).
+        val primary = when (mode) {
+            PrimaryMode.NEAREST -> byDistance.take(1)
+            PrimaryMode.FAVORITES -> byDistance.filter { it.id in favorites }
+        }
+        val primaryIds = primary.map { it.id }.toSet()
+        val others = byDistance.filter { it.id !in primaryIds }
 
+        // 14 stazioni × 2 direzioni × 3 treni: calcolo di pochi microsecondi.
         _state.value = MainUiState(
             ready = true,
-            stationId = id,
-            cards = cards,
+            mode = mode,
+            primaryCards = primary.map { buildCard(p, it, now) },
+            otherCards = others.map { buildCard(p, it, now) },
+            highlightedIds = primaryIds,
+            favorites = favorites,
             stations = p.stations,
             validFrom = p.validFrom.format(DATE),
             mapNight = SunTimes.isNight(ZonedDateTime.now(ROME)),
         )
         if (dayRequest != null) buildDay()  // aggiorna anche "passati / prossimo" nella giornata
+    }
+
+    /** Selettore "Vicina | Preferite". La scelta viene ricordata. */
+    fun setMode(newMode: PrimaryMode) {
+        mode = newMode
+        refresh()
+        viewModelScope.launch { orariApp.stationPrefs.setMode(newMode) }
+    }
+
+    /** Stella su una scheda: aggiunge o toglie la stazione dalle preferite. */
+    fun toggleFavorite(id: String) {
+        favorites = if (id in favorites) favorites - id else favorites + id
+        refresh()
+        val snapshot = favorites
+        viewModelScope.launch { orariApp.stationPrefs.setFavorites(snapshot) }
     }
 
     // ---- Schermata "giornata intera" ----
@@ -213,16 +248,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return if (now.hour < 3) now.toLocalDate().minusDays(1) else now.toLocalDate()
     }
 
-    /** Scelta manuale di una stazione: la mostriamo e la ricordiamo per il prossimo avvio. */
-    fun selectStation(id: String) {
-        stationId = id
-        refresh()
-        viewModelScope.launch { orariApp.stationPrefs.setLastStationId(id) }
-    }
-
     private fun buildCard(p: ScheduleProvider, station: Station, now: LocalDateTime) = StationCardUi(
         stationId = station.id,
         name = station.name,
+        favorite = station.id in favorites,
         blocks = DIRECTIONS
             .filter { p.servesDirection(station.id, it.direction) }  // ai capolinea una sola direzione
             .map { d ->

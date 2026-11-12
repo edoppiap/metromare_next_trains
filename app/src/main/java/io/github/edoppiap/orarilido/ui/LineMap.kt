@@ -48,7 +48,8 @@ import org.json.JSONObject
 @Composable
 fun LineMap(
     stations: List<Station>,
-    selectedStationId: String,
+    /** Stazioni da evidenziare (quelle "in primo piano"). */
+    highlightedIds: Set<String>,
     /** true = stile notturno (scuro). Lo decide il ciclo giorno/notte, non il tema dell'app. */
     night: Boolean,
     bottomPadding: androidx.compose.ui.unit.Dp,
@@ -104,7 +105,7 @@ fun LineMap(
         }
         // Un pallino per stazione: bianco bordato di blu, pieno di blu se selezionata.
         stations.forEach { s ->
-            val selected = s.id == selectedStationId
+            val selected = s.id in highlightedIds
             MarkerComposable(
                 keys = arrayOf<Any>(s.id, selected, dark),
                 state = rememberUpdatedMarkerState(LatLng(s.lat, s.lon)),

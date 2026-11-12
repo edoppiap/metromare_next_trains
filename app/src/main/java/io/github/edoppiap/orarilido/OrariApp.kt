@@ -2,6 +2,7 @@ package io.github.edoppiap.orarilido
 
 import android.app.Application
 import io.github.edoppiap.orarilido.data.ScheduleRepository
+import io.github.edoppiap.orarilido.data.SavedPrefs
 import io.github.edoppiap.orarilido.data.StationPrefs
 import io.github.edoppiap.orarilido.schedule.ScheduleProvider
 import kotlinx.coroutines.CoroutineScope
@@ -15,7 +16,7 @@ import kotlinx.coroutines.async
  * dell'Activity. Lo usiamo per far partire SUBITO, in parallelo e fuori dal
  * thread principale, le due letture che servono alla prima schermata:
  *   1. l'orario (schedule.json)
- *   2. l'ultima stazione usata (DataStore)
+ *   2. le preferenze: ultima stazione, preferiti, modalità (DataStore)
  * Intanto Android crea l'Activity: quando lei chiede i dati, spesso sono già pronti.
  */
 class OrariApp : Application() {
@@ -30,14 +31,14 @@ class OrariApp : Application() {
     lateinit var schedule: Deferred<ScheduleProvider>
         private set
 
-    /** L'ultima stazione salvata (o null al primo avvio). */
-    lateinit var savedStationId: Deferred<String?>
+    /** Preferenze salvate: ultima stazione, preferiti, modalità. */
+    lateinit var savedPrefs: Deferred<SavedPrefs>
         private set
 
     override fun onCreate() {
         super.onCreate()
         stationPrefs = StationPrefs(this)
         schedule = appScope.async { ScheduleRepository(this@OrariApp).load() }
-        savedStationId = appScope.async(Dispatchers.IO) { stationPrefs.lastStationId() }
+        savedPrefs = appScope.async(Dispatchers.IO) { stationPrefs.load() }
     }
 }

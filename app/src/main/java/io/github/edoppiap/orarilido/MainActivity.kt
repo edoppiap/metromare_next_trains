@@ -40,8 +40,9 @@ class MainActivity : ComponentActivity() {
                 Box {
                     MainScreen(
                         state,
-                        onSelectStation = viewModel::selectStation,
                         onOpenDay = viewModel::openDay,
+                        onModeChange = viewModel::setMode,
+                        onToggleFavorite = viewModel::toggleFavorite,
                     )
                     day?.let {
                         DayScreen(

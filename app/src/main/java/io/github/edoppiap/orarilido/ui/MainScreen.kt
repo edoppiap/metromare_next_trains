@@ -10,14 +10,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.BottomSheetScaffold
@@ -33,9 +37,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,30 +53,32 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import io.github.edoppiap.orarilido.data.PrimaryMode
 import io.github.edoppiap.orarilido.schedule.Direction
-import io.github.edoppiap.orarilido.schedule.Station
 import io.github.edoppiap.orarilido.ui.theme.OrariTheme
 import kotlinx.coroutines.launch
 
-
 /**
  * Schermata principale, stile Citymapper: mappa a tutto schermo e sopra
- * una tendina trascinabile. All'apertura la tendina è alta 1/3 dello
- * schermo e mostra la scheda della stazione; scorrendo, le altre stazioni.
+ * una tendina trascinabile, alta 1/3 all'apertura. Nella tendina:
+ *   - "In primo piano": la stazione più vicina oppure le preferite
+ *   - "Altre stazioni": tutte le altre, per distanza
  * Tocco sugli orari di una scheda = orari di tutta la giornata.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
     state: MainUiState,
-    onSelectStation: (String) -> Unit,
     onOpenDay: (stationId: String, direction: Direction) -> Unit,
+    onModeChange: (PrimaryMode) -> Unit,
+    onToggleFavorite: (String) -> Unit,
 ) {
     if (!state.ready) return  // dura pochi ms: la finestra resta sullo sfondo
 
     val sheetState = rememberStandardBottomSheetState(initialValue = SheetValue.PartiallyExpanded)
     val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
 
     // Con la tendina alzata, "indietro" la riporta a 1/3 invece di chiudere l'app.
     BackHandler(enabled = sheetState.currentValue == SheetValue.Expanded) {
@@ -87,8 +93,11 @@ fun MainScreen(
             sheetPeekHeight = sheetHeight,
             // Sfondo della tendina = sfondo dell'app; le schede sopra sono più chiare.
             sheetContainerColor = MaterialTheme.colorScheme.background,
+            sheetDragHandle = { DragHandle() },
             sheetContent = {
-                SheetContent(state = state, onOpenDay = onOpenDay)
+                // A tendina alzata del tutto, lascia spazio alla barra di stato in alto.
+                val expanded = sheetState.targetValue == SheetValue.Expanded
+                SheetContent(state, listState, expanded, onOpenDay, onModeChange, onToggleFavorite)
             },
         ) {
             // Il "corpo" dietro la tendina: la mappa, a TUTTO schermo, così si
@@ -110,10 +119,14 @@ fun MainScreen(
                 if (showMap) {
                     LineMap(
                         stations = state.stations,
-                        selectedStationId = state.stationId,
+                        highlightedIds = state.highlightedIds,
                         night = state.mapNight,
                         bottomPadding = sheetHeight,
-                        onStationClick = onSelectStation,
+                        // Tocco su una stazione della mappa: la tendina scorre alla sua scheda.
+                        onStationClick = { id ->
+                            val index = sheetItems(state).indexOfFirst { it is SheetItem.Card && it.card.stationId == id }
+                            if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
+                        },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -122,31 +135,152 @@ fun MainScreen(
     }
 }
 
-/**
- * Contenuto della tendina: una scheda per stazione, una sotto l'altra.
- * La prima è quella in primo piano (visibile con la tendina a 1/3);
- * per vedere le altre basta scorrere.
- */
+/** Maniglia della tendina, più bassa di quella standard per lasciare spazio alle schede. */
 @Composable
-private fun SheetContent(state: MainUiState, onOpenDay: (String, Direction) -> Unit) {
-    val listState = rememberLazyListState()
-    // Quando cambia la stazione in primo piano, torna in cima alla lista.
-    LaunchedEffect(state.stationId) { listState.scrollToItem(0) }
+private fun DragHandle() {
+    Box(
+        Modifier
+            .padding(top = 8.dp, bottom = 6.dp)
+            .size(width = 36.dp, height = 4.dp)
+            .background(MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(2.dp))
+    )
+}
+
+// ---- Elementi della tendina, nell'ordine in cui compaiono ----
+
+private sealed interface SheetItem {
+    val key: String
+    data object PrimaryHeader : SheetItem { override val key = "hdr_primary" }
+    data object FavoritesHint : SheetItem { override val key = "hint" }
+    data object OthersHeader : SheetItem { override val key = "hdr_others" }
+    data class Card(val card: StationCardUi, val primary: Boolean) : SheetItem {
+        override val key = (if (primary) "p_" else "o_") + card.stationId
+    }
+}
+
+/** La lista degli elementi della tendina: serve sia per disegnarla sia per trovare una scheda. */
+private fun sheetItems(state: MainUiState): List<SheetItem> = buildList {
+    add(SheetItem.PrimaryHeader)
+    if (state.primaryCards.isEmpty()) add(SheetItem.FavoritesHint)
+    state.primaryCards.forEach { add(SheetItem.Card(it, primary = true)) }
+    add(SheetItem.OthersHeader)
+    state.otherCards.forEach { add(SheetItem.Card(it, primary = false)) }
+}
+
+@Composable
+private fun SheetContent(
+    state: MainUiState,
+    listState: LazyListState,
+    expanded: Boolean,
+    onOpenDay: (String, Direction) -> Unit,
+    onModeChange: (PrimaryMode) -> Unit,
+    onToggleFavorite: (String) -> Unit,
+) {
+    // Quando cambia la modalità, torna in cima alla lista.
+    LaunchedEffect(state.mode) { listState.scrollToItem(0) }
 
     LazyColumn(
         Modifier
             .fillMaxWidth()
             .fillMaxHeight(),  // a tendina alzata occupa tutto lo schermo
         state = listState,
-        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(
+            start = 12.dp,
+            end = 12.dp,
+            top = if (expanded) WindowInsets.statusBars.asPaddingValues().calculateTopPadding() else 0.dp,
+            bottom = 24.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        itemsIndexed(state.cards, key = { _, card -> card.stationId }) { i, card ->
-            StationCard(
-                card = card,
-                primary = i == 0,
-                validFrom = state.validFrom,
-                onOpenDay = { direction -> onOpenDay(card.stationId, direction) },
+        items(sheetItems(state), key = { it.key }) { item ->
+            when (item) {
+                SheetItem.PrimaryHeader -> PrimaryHeader(state.mode, onModeChange)
+                SheetItem.FavoritesHint -> FavoritesHint()
+                SheetItem.OthersHeader -> OthersHeader(state.validFrom)
+                is SheetItem.Card -> StationCard(
+                    card = item.card,
+                    onOpenDay = { direction -> onOpenDay(item.card.stationId, direction) },
+                    onToggleFavorite = { onToggleFavorite(item.card.stationId) },
+                )
+            }
+        }
+    }
+}
+
+/** "In primo piano          [📍 Vicina | ⭐ Preferite]" */
+@Composable
+private fun PrimaryHeader(mode: PrimaryMode, onModeChange: (PrimaryMode) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "In primo piano",
+            modifier = Modifier.weight(1f),
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        ModeToggle(mode, onModeChange)
+    }
+}
+
+/** Selettore a due segmenti, quello attivo pieno di blu. */
+@Composable
+private fun ModeToggle(mode: PrimaryMode, onModeChange: (PrimaryMode) -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(colors.surface)
+            .padding(3.dp),
+    ) {
+        listOf(PrimaryMode.NEAREST to "📍 Vicina", PrimaryMode.FAVORITES to "★ Preferite").forEach { (m, label) ->
+            val selected = m == mode
+            Text(
+                label,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .then(if (selected) Modifier.background(colors.primary) else Modifier)
+                    .clickable { onModeChange(m) }
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (selected) colors.onPrimary else colors.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Mostrato in "Preferite" quando non ce n'è ancora nessuna. */
+@Composable
+private fun FavoritesHint() {
+    SheetCard {
+        Text(
+            "Nessuna stazione preferita.\nTocca ☆ su una stazione qui sotto per aggiungerla.",
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** "Altre stazioni ───── orari programmati · dal 9/11/2026" */
+@Composable
+private fun OthersHeader(validFrom: String) {
+    Column(Modifier.padding(top = 8.dp)) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Row(
+            Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 10.dp),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            Text(
+                "Altre stazioni",
+                modifier = Modifier.weight(1f),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                "Orari programmati · in vigore dal $validFrom",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -160,37 +294,43 @@ private fun SheetCard(content: @Composable () -> Unit) {
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
             .background(MaterialTheme.colorScheme.surface)
-            .padding(16.dp),
+            .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 14.dp),
     ) { content() }
 }
 
-/** Scheda di una stazione: nome come titolo, una riga per direzione. */
+/** Scheda di una stazione: nome e stella, poi una riga per direzione. */
 @Composable
 private fun StationCard(
     card: StationCardUi,
-    primary: Boolean,
-    validFrom: String,
     onOpenDay: (Direction) -> Unit,
+    onToggleFavorite: () -> Unit,
 ) {
+    val colors = MaterialTheme.colorScheme
     SheetCard {
-        Text(
-            card.name,
-            modifier = Modifier.padding(bottom = 12.dp),
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        card.blocks.forEachIndexed { i, block ->
-            if (i > 0) HorizontalDivider(Modifier.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.outlineVariant)
-            CompactDirectionRow(block, onClick = { onOpenDay(block.direction) })
-        }
-        if (primary) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "Orari programmati, non in tempo reale · in vigore dal $validFrom",
-                modifier = Modifier.padding(top = 12.dp),
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                card.name,
+                modifier = Modifier.weight(1f),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = colors.onSurface,
             )
+            // Stella: piena e blu se preferita, vuota e grigia altrimenti.
+            Text(
+                if (card.favorite) "★" else "☆",
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable(onClick = onToggleFavorite)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                fontSize = 24.sp,
+                color = if (card.favorite) colors.primary else colors.onSurfaceVariant,
+            )
+        }
+        Column(Modifier.padding(end = 8.dp)) {
+            card.blocks.forEachIndexed { i, block ->
+                if (i > 0) HorizontalDivider(Modifier.padding(vertical = 8.dp), color = colors.outlineVariant)
+                CompactDirectionRow(block, onClick = { onOpenDay(block.direction) })
+            }
         }
     }
 }
@@ -280,24 +420,21 @@ private fun MainScreenPreview() {
         DepartureRow("20", "min", "08:21", unconfirmed = false, imminent = false),
         DepartureRow("35", "min", "08:36", unconfirmed = false, imminent = false),
     )
+    fun card(id: String, name: String, fav: Boolean) = StationCardUi(
+        id, name, fav, listOf(
+            DirectionBlock(Direction.TO_ROMA, "Verso Roma", "Porta San Paolo", roma),
+            DirectionBlock(Direction.TO_OSTIA, "Verso Ostia", "Cristoforo Colombo", ostia),
+        )
+    )
     OrariTheme {
         MainScreen(
             MainUiState(
                 ready = true,
-                stationId = "acilia",
                 validFrom = "9/11/2026",
-                cards = listOf("acilia" to "Acilia", "vitinia" to "Vitinia").map { (id, name) ->
-                    StationCardUi(
-                        id, name, listOf(
-                            DirectionBlock(Direction.TO_ROMA, "Verso Roma", "Porta San Paolo", roma),
-                            DirectionBlock(Direction.TO_OSTIA, "Verso Ostia", "Cristoforo Colombo", ostia),
-                        )
-                    )
-                },
-                stations = listOf(Station("acilia", "Acilia", 0.0, 0.0), Station("vitinia", "Vitinia", 0.0, 0.0)),
+                primaryCards = listOf(card("acilia", "Acilia", true)),
+                otherCards = listOf(card("vitinia", "Vitinia", false)),
             ),
-            onSelectStation = {},
-            onOpenDay = { _, _ -> },
+            onOpenDay = { _, _ -> }, onModeChange = {}, onToggleFavorite = {},
         )
     }
 }
