@@ -114,7 +114,7 @@ private fun MenuList(onNavigate: (InfoPage) -> Unit) {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName
     }.getOrNull() ?: "?"
     Text(
-        "Orari Roma–Lido · versione $version\n" +
+        "Orari Metromare · versione $version\n" +
             "App non ufficiale, non affiliata a Cotral o Astral\n" +
             "Orari programmati, non in tempo reale",
         modifier = Modifier
