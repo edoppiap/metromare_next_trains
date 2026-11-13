@@ -94,6 +94,12 @@ fun MainScreen(
     // Cerchi intorno all'utente: solo a mappa piena; il tocco sul pallino li spegne/accende.
     var showCircles by rememberSaveable { mutableStateOf(true) }
     val fullMap = sheet.stop == SheetStop.COLLAPSED
+    // Mappa piena raggiunta spostando la mappa col dito: stai cercando qualcosa,
+    // quindi niente cerchi automatici (restano a un tocco sul pallino).
+    // Si azzera appena la tendina lascia la mappa piena.
+    var circlesHeldBack by remember { mutableStateOf(false) }
+    LaunchedEffect(fullMap) { if (!fullMap) circlesHeldBack = false }
+    val circlesOn = showCircles && fullMap && !circlesHeldBack
     // Direzione scelta a mano nella striscia a mappa piena, e per quale stazione.
     // Vale solo per quella stazione: se cambia, si torna alla direzione predefinita.
     var stripChoiceStation by rememberSaveable { mutableStateOf<String?>(null) }
@@ -123,10 +129,23 @@ fun MainScreen(
                     state = state,
                     bottomPadding = coveredHeight,
                     controlsLift = controlsLift,
-                    showCircles = showCircles && fullMap,
-                    onUserClick = { showCircles = !showCircles },
+                    showCircles = circlesOn,
+                    // Tocco sul pallino: accende/spegne i cerchi (se erano trattenuti, li accende).
+                    onUserClick = {
+                        if (circlesHeldBack) {
+                            circlesHeldBack = false
+                            showCircles = true
+                        } else {
+                            showCircles = !showCircles
+                        }
+                    },
                     // Chi sposta la mappa vuole vederla: la tendina scende a "mappa piena".
-                    onMapGesture = { if (sheet.stop == SheetStop.HALF) sheet.animateTo(SheetStop.COLLAPSED) },
+                    onMapGesture = {
+                        if (sheet.stop == SheetStop.HALF) {
+                            circlesHeldBack = true
+                            sheet.animateTo(SheetStop.COLLAPSED)
+                        }
+                    },
                     onStationClick = { id ->
                         // Tocco su una stazione: la tendina (se serve) risale e scorre alla sua scheda.
                         if (fullMap) sheet.animateTo(SheetStop.HALF)
@@ -134,7 +153,7 @@ fun MainScreen(
                         if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
                     },
                     onMenu = onMenu,
-                    travelToggleVisible = state.userLocation != null && showCircles && fullMap,
+                    travelToggleVisible = state.userLocation != null && circlesOn,
                     onTravelMode = onTravelMode,
                 )
             },
