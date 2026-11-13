@@ -126,6 +126,8 @@ fun MainScreen(
     // a piedi/in bici non servono, al loro posto in alto c'è la X.
     val goActive = state.go?.recognizing == false
     val circlesOn = !goActive && (circlesByTap ?: (fullMap && !circlesHeldBack))
+    /** Il percorso suggerito è disegnato sulla mappa (solo in "tu + stazione", lo decide LineMap). */
+    var routeOnMap by remember { mutableStateOf(false) }
     // Direzione scelta a mano nella striscia a mappa piena, e per quale stazione.
     // Vale solo per quella stazione: se cambia, si torna alla direzione predefinita.
     var stripChoiceStation by rememberSaveable { mutableStateOf<String?>(null) }
@@ -199,7 +201,11 @@ fun MainScreen(
                         if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
                     },
                     onMenu = onMenu,
-                    travelToggleVisible = state.userLocation != null && circlesOn,
+                    // Il selettore cambia cerchi E percorso: serve se c'è almeno uno dei due.
+                    travelToggleVisible = state.userLocation != null && (circlesOn || routeOnMap),
+                    onRouteVisible = { routeOnMap = it },
+                    // Punti di interesse: solo a mappa piena e mai in Go (non "inquinano" la schermata).
+                    showPlaces = fullMap && state.go == null,
                     onTravelMode = onTravelMode,
                     goActive = goActive,
                     onExitGo = onExitGo,
@@ -252,6 +258,8 @@ private fun MapLayer(
     onStationClick: (String) -> Unit,
     onMenu: () -> Unit,
     travelToggleVisible: Boolean,
+    onRouteVisible: (Boolean) -> Unit,
+    showPlaces: Boolean,
     onTravelMode: (TravelMode) -> Unit,
     goActive: Boolean,
     onExitGo: () -> Unit,
@@ -263,6 +271,7 @@ private fun MapLayer(
     LaunchedEffect(Unit) {
         withFrameNanos { }  // aspetta che il primo fotogramma sia disegnato
         showMap = true
+        io.github.edoppiap.orarilido.logStartup("Creazione mappa iniziata")
     }
     Box(
         Modifier
@@ -282,6 +291,9 @@ private fun MapLayer(
                 showCircles = showCircles,
                 goStations = if (goActive) state.go?.focusStations.orEmpty() else emptyList(),
                 goPinnedId = state.go?.stripStop?.takeIf { it.pinned }?.stationId,
+                route = state.route,
+                onRouteVisible = onRouteVisible,
+                showPlaces = showPlaces,
                 onUserClick = onUserClick,
                 onMapGesture = onMapGesture,
                 onStationClick = onStationClick,
@@ -298,7 +310,7 @@ private fun MapLayer(
         ) {
             MapButton(onClick = onMenu) { MenuIcon(MaterialTheme.colorScheme.onSurface) }
             Spacer(Modifier.weight(1f))
-            // Il selettore serve solo quando ci sono i cerchi (mappa piena, posizione nota).
+            // Il selettore serve quando ci sono i cerchi o il percorso suggerito.
             // In Go al suo posto c'è la X per uscire (i cerchi in treno non servono).
             Box(contentAlignment = Alignment.CenterEnd) {
                 androidx.compose.animation.AnimatedVisibility(visible = travelToggleVisible && !goActive, enter = fadeIn(), exit = fadeOut()) {

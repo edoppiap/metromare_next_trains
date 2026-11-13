@@ -20,6 +20,8 @@ import io.github.edoppiap.orarilido.go.GoState
 import io.github.edoppiap.orarilido.go.LineTrack
 import io.github.edoppiap.orarilido.go.RideSimulator
 import io.github.edoppiap.orarilido.location.LocationFix
+import io.github.edoppiap.orarilido.walk.WalkGraph
+import io.github.edoppiap.orarilido.walk.WalkRouter
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,6 +39,7 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 // ---- Stato della schermata: tutto ciò che la UI deve disegnare, già "masticato" ----
 
@@ -58,7 +61,10 @@ data class MainUiState(
     val mapNight: Boolean = false,
     /** Posizione dell'utente (solo in memoria), null se non disponibile. */
     val userLocation: GeoPoint? = null,
-    /** La stazione più vicina all'utente, per lo zoom della mappa. */
+    /**
+     * La stazione di riferimento per inquadrature e percorso: la più vicina,
+     * oppure (in modalità Preferite) la preferita più vicina. null senza GPS.
+     */
     val nearestStation: Station? = null,
     /** A piedi o in bici: grandezza dei cerchi sulla mappa. */
     val travelMode: TravelMode = TravelMode.WALK,
@@ -66,6 +72,16 @@ data class MainUiState(
     val go: GoUi? = null,
     /** Simulazione di viaggio in corso (solo build di prova). */
     val simulating: Boolean = false,
+    /** Percorso suggerito verso la stazione più vicina (null = nessuno: senza GPS, in Go, fuori zona). */
+    val route: RouteUi? = null,
+)
+
+/** Il percorso da disegnare sulla mappa: punti (da te alla stazione) e "12 min". */
+data class RouteUi(
+    val stationId: String,
+    val mode: TravelMode,
+    val points: List<GeoPoint>,
+    val minutes: Int,
 )
 
 /**
@@ -165,6 +181,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Il viaggio in corso ha già avuto la sua fermata predefinita (si applica una volta sola). */
     private var goDefaultApplied = false
 
+    // ---- Percorso suggerito (a piedi / in bici) ----
+    /** Rete di strade attorno alle stazioni: si carica DOPO gli orari (vedi init). */
+    private var walkGraph: WalkGraph? = null
+    /** Ultimo percorso calcolato (null = nessuno). */
+    private var route: RouteUi? = null
+    /** Per cosa è stato chiesto l'ultimo calcolo: stazione, mezzo, posizione. */
+    private var routeRequest: Triple<String, TravelMode, GeoPoint>? = null
+    private var routeJob: Job? = null
+
     private val _fastGps = MutableStateFlow(false)
     /** true = la modalità Go vuole una posizione ogni 5 s (vedi LocationSource). */
     val fastGps: StateFlow<Boolean> = _fastGps.asStateFlow()
@@ -202,6 +227,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             this@MainViewModel.track = track
             detector = GoDetector(track, p.stations, p::minutesFromTerminus)
+
+            // La rete di strade per il percorso suggerito (~0,7 MB): ancora dopo,
+            // e su un altro thread. Il percorso compare quando è pronta.
+            walkGraph = withContext(Dispatchers.Default) {
+                WalkGraph.parse(app.assets.open("walk.bin").use { it.readBytes() })
+            }
+            io.github.edoppiap.orarilido.logStartup("Rete strade per i percorsi pronta")
+            refresh()
         }
     }
 
@@ -254,6 +287,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         _fastGps.value = go != null && simulation == null
 
+        // Stazione di riferimento: la più vicina, ma in modalità Preferite la preferita
+        // più vicina (es. vai a Stella Polare per i posti a sedere, o ad Acilia Sud
+        // in bici perché Acilia è in salita: la scegli tu mettendola tra le preferite).
+        val focus = if (user == null) null else primary.firstOrNull() ?: byDistance.first()
+        // Percorso suggerito: solo con il GPS, solo verso la stazione di riferimento, mai in Go.
+        if (go == null && user != null && focus != null) updateRoute(user, focus.id) else clearRoute()
+
         // 14 stazioni × 2 direzioni × 3 treni: calcolo di pochi microsecondi.
         _state.value = MainUiState(
             ready = true,
@@ -266,10 +306,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             validFrom = p.validFrom.format(DATE),
             mapNight = SunTimes.isNight(now.atZone(ROME)),
             userLocation = onTrain?.pointOnLine ?: user,
-            nearestStation = onTrain?.ahead?.firstOrNull()?.station ?: if (user != null) byDistance.first() else null,
+            nearestStation = onTrain?.ahead?.firstOrNull()?.station ?: focus,
             travelMode = travelMode,
             go = go,
             simulating = simulation != null,
+            route = route,
         )
         if (dayRequest != null) buildDay()  // aggiorna anche "passati / prossimo" nella giornata
     }
@@ -333,6 +374,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             stationId = nearest
             viewModelScope.launch { orariApp.stationPrefs.setLastStationId(nearest) }
         }
+    }
+
+    /**
+     * Ricalcola il percorso verso [stationId] se serve: è cambiata la stazione o
+     * il mezzo, oppure ti sei spostato di almeno [ROUTE_MIN_MOVE_M]. Il calcolo
+     * (A*, qualche decina di ms) gira su un altro thread; a percorso pronto
+     * si aggiorna solo quel campo dello stato.
+     */
+    private fun updateRoute(user: GeoPoint, stationId: String) {
+        val g = walkGraph ?: return  // rete non ancora caricata: si riprova al prossimo refresh
+        val mode = travelMode
+        val last = routeRequest
+        if (last != null && last.first == stationId && last.second == mode &&
+            Geo.distanceMeters(last.third, user) < ROUTE_MIN_MOVE_M
+        ) return
+        routeRequest = Triple(stationId, mode, user)
+        routeJob?.cancel()
+        routeJob = viewModelScope.launch {
+            val maxMinutes = if (mode == TravelMode.BIKE) ROUTE_MAX_BIKE_MIN else ROUTE_MAX_WALK_MIN
+            val t0 = System.nanoTime()
+            val found = withContext(Dispatchers.Default) { WalkRouter.route(g, user, stationId, mode, maxMinutes) }
+            // Misura (solo log, come OrariAvvio): quanto costa il calcolo sul telefono.
+            android.util.Log.i("OrariAvvio", "Percorso $mode verso $stationId: ${(System.nanoTime() - t0) / 1_000_000} ms" +
+                (found?.let { ", ${it.minutes.roundToInt()} min, ${it.meters.roundToInt()} m" } ?: ", nessuno"))
+            route = found?.let { RouteUi(stationId, mode, it.points, it.minutes.roundToInt().coerceAtLeast(1)) }
+            _state.value = _state.value.copy(route = route)
+        }
+    }
+
+    private fun clearRoute() {
+        routeJob?.cancel()
+        routeRequest = null
+        route = null
     }
 
     /** Pulsante X: esci dalla modalità Go per questo viaggio. */
@@ -567,6 +641,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         const val ROWS_PER_DIRECTION = 3
         /** Posizioni meno precise di così non vengono date al riconoscitore del treno. */
         const val MAX_GO_ACCURACY_M = 50f
+        /** Percorso: si ricalcola solo se ti sei spostato almeno di tanto (metri). */
+        const val ROUTE_MIN_MOVE_M = 15.0
+        /** Limiti delle zone coperte da walk.bin (vedi tools/osm_graph.py --write). */
+        const val ROUTE_MAX_WALK_MIN = 60.0
+        const val ROUTE_MAX_BIKE_MIN = 25.0
         /** Simulazione: l'orologio corre 5 volte più veloce (un viaggio di 30 min dura 6 min). */
         const val SIM_SPEED = 5L
         val ROME: ZoneId = ZoneId.of("Europe/Rome")

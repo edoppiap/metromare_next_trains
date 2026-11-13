@@ -59,6 +59,20 @@ import io.github.edoppiap.orarilido.location.rememberHeading
 import io.github.edoppiap.orarilido.ui.theme.Blue
 import io.github.edoppiap.orarilido.ui.theme.BlueDark
 import io.github.edoppiap.orarilido.ui.theme.Card
+import io.github.edoppiap.orarilido.ui.theme.Grey
+import io.github.edoppiap.orarilido.ui.theme.GreyDark
+import io.github.edoppiap.orarilido.walk.WalkGraph
+import io.github.edoppiap.orarilido.places.Place
+import io.github.edoppiap.orarilido.places.PlaceKind
+import io.github.edoppiap.orarilido.places.Places
+import com.google.android.gms.maps.model.BitmapDescriptor
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
+import com.google.maps.android.compose.Marker
+import androidx.compose.runtime.key
+import androidx.compose.ui.graphics.toArgb
+import com.google.android.gms.maps.model.Dot
+import com.google.android.gms.maps.model.Gap
+import com.google.android.gms.maps.model.RoundCap
 import io.github.edoppiap.orarilido.ui.theme.CardDark
 import io.github.edoppiap.orarilido.ui.theme.Ink
 import io.github.edoppiap.orarilido.ui.theme.InkDark
@@ -92,7 +106,7 @@ fun LineMap(
     highlightedIds: Set<String>,
     /** true = stile notturno (scuro). Lo decide il ciclo giorno/notte, non il tema dell'app. */
     night: Boolean,
-    /** Posizione dell'utente (null = sconosciuta) e stazione più vicina, per lo zoom. */
+    /** Posizione dell'utente (null = sconosciuta) e stazione di riferimento (più vicina o preferita più vicina). */
     userLocation: GeoPoint?,
     nearestStation: Station?,
     /** A piedi o in bici: decide la grandezza dei cerchi. */
@@ -106,6 +120,12 @@ fun LineMap(
     goStations: List<Station> = emptyList(),
     /** In Go, la fermata fissata col tocco (null = nessuna): fissandola, la mappa inquadra il tratto fino a lei. */
     goPinnedId: String? = null,
+    /** Percorso suggerito verso la stazione più vicina (null = nessuno). */
+    route: RouteUi? = null,
+    /** Il percorso è davvero disegnato? (serve a MainScreen per il selettore 🚶|🚲) */
+    onRouteVisible: (Boolean) -> Unit = {},
+    /** Punti di interesse (fontanelle, bar, ...) ammessi? Solo a mappa piena e mai in Go. */
+    showPlaces: Boolean = false,
     onUserClick: () -> Unit,
     bottomPadding: androidx.compose.ui.unit.Dp,
     /**
@@ -143,6 +163,11 @@ fun LineMap(
         )
     }
     var mapLoaded by remember { mutableStateOf(false) }
+    // Misura: quando il primo fotogramma con la mappa (ancora vuota) arriva a schermo.
+    LaunchedEffect(Unit) {
+        androidx.compose.runtime.withFrameNanos { }
+        io.github.edoppiap.orarilido.logStartup("Mappa a schermo (vuota)")
+    }
     // I nomi delle stazioni compaiono solo con uno zoom abbastanza vicino,
     // altrimenti con la linea intera si sovrapporrebbero.
     val showNames by remember { derivedStateOf { cameraState.position.zoom >= NAMES_MIN_ZOOM } }
@@ -181,6 +206,22 @@ fun LineMap(
         label = "metersPerMinute",
     )
 
+    // ---- Percorso suggerito: tratteggio grigio che "cresce" dal pallino alla stazione ----
+    // drawn va da 0 (niente) a 1 (percorso intero). Si ridisegna da capo solo se
+    // cambia la stazione o il mezzo; mentre cammini il percorso si aggiorna e basta.
+    // Quando sparisce (es. entri in Go) si ritira verso di te.
+    val drawn = remember { Animatable(0f) }
+    var lastRoute by remember { mutableStateOf<RouteUi?>(null) }
+    if (route != null && route != lastRoute) lastRoute = route
+    val shownRoute = lastRoute
+    // Lunghezze progressive dei punti, per tagliare il percorso alla frazione "drawn".
+    val routeCumulative = remember(shownRoute) {
+        val pts = shownRoute?.points.orEmpty()
+        DoubleArray(pts.size).also { acc ->
+            for (i in 1 until pts.size) acc[i] = acc[i - 1] + WalkGraph.distanceM(pts[i - 1], pts[i])
+        }
+    }
+
     // Inquadratura ATTUALE della mappa (null = l'utente l'ha spostata col dito).
     // All'apertura è la linea intera, perché la mappa nasce così.
     var framing by remember { mutableStateOf<RecenterTarget?>(RecenterTarget.LINE) }
@@ -188,24 +229,108 @@ fun LineMap(
     // Alla prima posizione: zoom che inquadra te e la stazione più vicina.
     // Una volta sola, così poi la mappa resta dove la sposti tu.
     var zoomedToUser by remember { mutableStateOf(false) }
+    /** Lo zoom iniziale su di te è finito (o non ci sarà): il percorso può comparire. */
+    var routeReady by remember { mutableStateOf(false) }
     LaunchedEffect(mapLoaded, userLocation != null) {
         val user = userLocation ?: return@LaunchedEffect
         val station = nearestStation ?: return@LaunchedEffect
         if (!mapLoaded || zoomedToUser) return@LaunchedEffect
         zoomedToUser = true
-        // Se nel frattempo hai già spostato la mappa, non te la portiamo via.
-        if (framing != RecenterTarget.LINE) return@LaunchedEffect
-        // Se sei lontano dalla linea (es. in un'altra città) non ha senso zoomare.
-        if (Geo.distanceMeters(user, station) > MAX_ZOOM_DISTANCE_M) return@LaunchedEffect
-        framing = RecenterTarget.USER_AND_STATION
-        val bounds = LatLngBounds.builder()
-            .include(LatLng(user.lat, user.lon))
-            .include(LatLng(station.lat, station.lon))
-            .build()
-        val marginPx = with(density) { 72.dp.roundToPx() }
-        cameraState.animate(CameraUpdateFactory.newLatLngBounds(bounds, marginPx), 800)
-        // Se tu e la stazione siete vicinissimi, non zoomare troppo.
-        if (cameraState.position.zoom > MAX_ZOOM) cameraState.animate(CameraUpdateFactory.zoomTo(MAX_ZOOM), 300)
+        // Il percorso suggerito può comparire solo da qui in poi (a zoom finito).
+        try {
+            // Se nel frattempo hai già spostato la mappa, non te la portiamo via.
+            if (framing != RecenterTarget.LINE) return@LaunchedEffect
+            // Se sei lontano dalla linea (es. in un'altra città) non ha senso zoomare.
+            if (Geo.distanceMeters(user, station) > MAX_ZOOM_DISTANCE_M) return@LaunchedEffect
+            framing = RecenterTarget.USER_AND_STATION
+            val bounds = LatLngBounds.builder()
+                .include(LatLng(user.lat, user.lon))
+                .include(LatLng(station.lat, station.lon))
+                .build()
+            val marginPx = with(density) { 72.dp.roundToPx() }
+            cameraState.animate(CameraUpdateFactory.newLatLngBounds(bounds, marginPx), 800)
+            // Se tu e la stazione siete vicinissimi, non zoomare troppo.
+            if (cameraState.position.zoom > MAX_ZOOM) cameraState.animate(CameraUpdateFactory.zoomTo(MAX_ZOOM), 300)
+        } finally {
+            routeReady = true
+        }
+    }
+
+    // ---- Quando si vede il percorso (regola decisa con l'utente il 13/11) ----
+    // "Tu + stazione" decide quando COMPARE, non quando sparisce:
+    //  - compare arrivando in "tu + stazione" (la prima volta dopo lo zoom iniziale);
+    //  - RESTA se sposti o zoomi la mappa a mano (probabilmente lo stai guardando);
+    //  - sparisce scegliendo "tu" o "tutta la linea" col pulsante, o toccando "🚶 12 min";
+    //  - ricompare tornando a "tu + stazione", o se cambiano stazione o mezzo.
+    //  Mai in Go.
+    var routeOn by remember { mutableStateOf(false) }
+    LaunchedEffect(framing, routeReady) {
+        when (framing) {
+            RecenterTarget.USER_AND_STATION -> if (routeReady) routeOn = true
+            RecenterTarget.USER, RecenterTarget.LINE -> routeOn = false
+            else -> Unit  // mappa spostata a mano (null) o solo stazione: resta com'è
+        }
+    }
+    var lastRouteFor by remember { mutableStateOf<Pair<String, TravelMode>?>(null) }
+    val routeFor = route?.let { it.stationId to it.mode }
+    LaunchedEffect(routeFor) {
+        // Cambio di stazione di riferimento o di mezzo (non il primo percorso): si rimostra.
+        if (routeFor != null && lastRouteFor != null && routeFor != lastRouteFor && routeReady) routeOn = true
+        if (routeFor != null) lastRouteFor = routeFor
+    }
+    val routeVisible = route != null && routeOn && goStations.isEmpty()
+    LaunchedEffect(routeVisible) { onRouteVisible(routeVisible) }
+    val routeKey = route?.takeIf { routeVisible }?.let { it.stationId to it.mode }
+    LaunchedEffect(routeKey) {
+        if (routeKey != null) {
+            // Cresce a mappa FERMA: durante uno zoom o uno spostamento non si vedrebbe.
+            androidx.compose.runtime.snapshotFlow { cameraState.isMoving }.first { !it }
+            drawn.snapTo(0f)
+            drawn.animateTo(1f, tween(ROUTE_DRAW_MS, easing = FastOutSlowInEasing))
+        } else {
+            drawn.animateTo(0f, tween(300))
+        }
+    }
+
+    // ---- Punti di interesse (fontanelle, bar, ciclofficine, ...) ----
+    // Si leggono da assets solo dopo che la mappa è caricata (non servono all'apertura).
+    val places by produceState(initialValue = emptyList<Place>(), mapLoaded) {
+        if (mapLoaded && value.isEmpty()) value = withContext(Dispatchers.IO) { loadPlaces(context) }
+    }
+    // Compaiono solo da vicino: con lo zoom lontano sarebbero migliaia di puntini.
+    val placesZoomOk by remember { derivedStateOf { cameraState.position.zoom >= PLACES_MIN_ZOOM } }
+    val placesOn = showPlaces && placesZoomOk && places.isNotEmpty()
+    val placesAlpha by animateFloatAsState(if (placesOn) 1f else 0f, tween(400), label = "places")
+    // Quali disegnare: quelli nello schermo (con un po' di margine), i più vicini al
+    // centro, al massimo PLACES_MAX. Si ricalcola quando la mappa si ferma.
+    var shownPlaces by remember { mutableStateOf(emptyList<Place>()) }
+    LaunchedEffect(places, cameraState.isMoving, placesOn) {
+        if (cameraState.isMoving || !placesOn) return@LaunchedEffect
+        val b = cameraState.projection?.visibleRegion?.latLngBounds ?: return@LaunchedEffect
+        val dLat = (b.northeast.latitude - b.southwest.latitude) * 0.25
+        val dLon = (b.northeast.longitude - b.southwest.longitude) * 0.25
+        val c = b.center
+        shownPlaces = places
+            .filter {
+                it.point.lat in (b.southwest.latitude - dLat)..(b.northeast.latitude + dLat) &&
+                    it.point.lon in (b.southwest.longitude - dLon)..(b.northeast.longitude + dLon)
+            }
+            .sortedBy { (it.point.lat - c.latitude).let { d -> d * d } + (it.point.lon - c.longitude).let { d -> d * d * 0.55 } }
+            .take(PLACES_MAX)
+    }
+    // Punto toccato: il suo nome compare per qualche secondo (come per le stazioni).
+    var tappedPlace by remember { mutableStateOf<Place?>(null) }
+    var lastTappedPlace by remember { mutableStateOf<Place?>(null) }
+    val tappedAlpha by animateFloatAsState(
+        if (tappedPlace != null && placesOn) 1f else 0f,
+        tween(if (tappedPlace != null) 200 else 600),
+        label = "tappedPlace",
+    )
+    LaunchedEffect(tappedPlace) {
+        if (tappedPlace != null) {
+            delay(NAME_REVEAL_MS)
+            tappedPlace = null
+        }
     }
 
     // Direzione in cui punta il telefono (null = sensore assente o posizione ignota).
@@ -220,8 +345,8 @@ fun LineMap(
         }
     }
     val scope = rememberCoroutineScope()
-    // La stazione di riferimento è UNA sola: la più vicina (anche con più
-    // preferite in primo piano, che altrimenti allargherebbero troppo lo zoom).
+    // La stazione di riferimento è UNA sola: la più vicina, o in modalità Preferite
+    // la preferita più vicina (con più preferite lo zoom si allargherebbe troppo).
     // Senza GPS: la prima in primo piano (l'ultima usata).
     val focusStation = nearestStation ?: stations.firstOrNull { it.id in highlightedIds }
     // Il giro delle inquadrature: stazione → tu → linea → stazione → ...
@@ -232,9 +357,10 @@ fun LineMap(
         add(RecenterTarget.LINE)
     }
     // Cosa farà il PROSSIMO tocco (l'icona del pulsante lo mostra): il passo
-    // dopo quello attuale; se hai spostato la mappa, si riparte da "tu".
+    // dopo quello attuale; se hai spostato la mappa, si riparte dal primo del giro,
+    // cioè "tu + stazione" (deciso 13/11: prima era "tu", ma faceva sparire il percorso).
     val nextTarget = when (val current = framing) {
-        null -> if (userLocation != null) RecenterTarget.USER else cycle.first()
+        null -> cycle.first()
         else -> cycle[(cycle.indexOf(current) + 1) % cycle.size]  // indexOf = −1 → il primo
     }
     // Spazio coperto dalla tendina ATTUALMENTE applicato alla mappa (vedi MapEffect più giù).
@@ -298,7 +424,8 @@ fun LineMap(
     // (e in Go anche quando cambiano le fermate davanti: lo zoom si stringe man mano).
     // UN SOLO effetto per tutto: due effetti separati facevano partire due
     // animazioni insieme, che si contendevano la camera.
-    LaunchedEffect(userLocation, goStations, goPinnedId, mapLoaded) {
+    // (Anche quando cambia la stazione di riferimento, es. passando a Preferite.)
+    LaunchedEffect(userLocation, goStations, goPinnedId, mapLoaded, nearestStation?.id) {
         if (!mapLoaded) return@LaunchedEffect
         val goKey = goActive to goPinnedId
         if (goActive && goKey != lastGoKey) framing = RecenterTarget.USER_AND_STATION
@@ -331,7 +458,10 @@ fun LineMap(
                 compassEnabled = false,
                 tiltGesturesEnabled = false,
             ),
-            onMapLoaded = { mapLoaded = true },
+            onMapLoaded = {
+                mapLoaded = true
+                io.github.edoppiap.orarilido.logStartup("Mappa caricata")
+            },
         ) {
             // La tendina ha cambiato altezza: cambia lo spazio visibile della mappa.
             // Google centra le cose nello spazio NON coperto; se cambiassimo solo
@@ -359,6 +489,73 @@ fun LineMap(
             }
             if (linePoints.isNotEmpty()) {
                 Polyline(points = linePoints, color = lineColor, width = with(density) { 5.dp.toPx() })
+            }
+            // Punti di interesse: icone preparate una volta per tipo (bitmap), così
+            // anche 150 marker restano leggeri.
+            if (placesAlpha > 0.01f) {
+                val icons = remember(dark) { PlaceKind.entries.associateWith { placeIcon(it, night, density.density) } }
+                shownPlaces.forEach { place ->
+                    key(place) {
+                        Marker(
+                            state = rememberUpdatedMarkerState(LatLng(place.point.lat, place.point.lon)),
+                            icon = icons.getValue(place.kind),
+                            anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
+                            alpha = placesAlpha,
+                            zIndex = 0.3f,
+                            onClick = {
+                                tappedPlace = place
+                                lastTappedPlace = place
+                                true  // niente fumetto e niente centratura di Google
+                            },
+                        )
+                    }
+                }
+                val tp = lastTappedPlace
+                if (tp != null && tappedAlpha > 0.01f) {
+                    MarkerComposable(
+                        keys = arrayOf<Any>("place", tp, dark),
+                        state = rememberUpdatedMarkerState(LatLng(tp.point.lat, tp.point.lon)),
+                        // Sopra l'icona: il bordo basso dell'etichetta un po' più su del punto.
+                        anchor = androidx.compose.ui.geometry.Offset(0.5f, 1.9f),
+                        zIndex = 2.8f,
+                        alpha = tappedAlpha * placesAlpha,
+                        onClick = { true },
+                    ) {
+                        StationName(tp.name.ifEmpty { tp.kind.label }, selected = false, night = night, startPadding = 0)
+                    }
+                }
+            }
+            // Percorso suggerito: puntini grigi (non è un binario), sotto stazioni e pallino.
+            val f = drawn.value
+            if (shownRoute != null && f > 0.001f && shownRoute.points.size >= 2) {
+                val total = routeCumulative.last()
+                val partial = routePrefix(shownRoute.points, routeCumulative, total * f)
+                val grey = if (night) GreyDark else Grey
+                Polyline(
+                    points = partial,
+                    color = grey,
+                    width = with(density) { 5.dp.toPx() },
+                    pattern = listOf(Dot(), Gap(with(density) { 7.dp.toPx() })),
+                    startCap = RoundCap(),
+                    endCap = RoundCap(),
+                    zIndex = 0.4f,
+                )
+                // Etichetta col tempo a metà strada: compare quando la linea ci arriva.
+                val labelAlpha = ((f - 0.5f) * 4f).coerceIn(0f, 1f)
+                if (labelAlpha > 0.01f) {
+                    val mid = routePrefix(shownRoute.points, routeCumulative, total / 2).last()
+                    val emoji = if (shownRoute.mode == TravelMode.BIKE) "🚲" else "🚶"
+                    MarkerComposable(
+                        keys = arrayOf<Any>("route", shownRoute.minutes, shownRoute.mode, dark),
+                        state = rememberUpdatedMarkerState(mid),
+                        anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
+                        zIndex = 0.7f,
+                        alpha = labelAlpha,
+                        onClick = { routeOn = false; true },  // tocco sul tempo = "ho capito, toglilo"
+                    ) {
+                        RouteLabel(emoji + " " + shownRoute.minutes + " min", night)
+                    }
+                }
             }
             // Un pallino per stazione: bianco bordato di blu, pieno di blu se selezionata.
             stations.forEach { s ->
@@ -404,9 +601,10 @@ fun LineMap(
                     Circle(
                         center = center,
                         radius = radius,
-                        strokeColor = lineColor.copy(alpha = 0.55f),
-                        strokeWidth = with(density) { 1.5.dp.toPx() },
-                        fillColor = lineColor.copy(alpha = 0.04f),
+                        // Leggeri (feedback 13/11: la mappa si riempiva troppo): bordo sottile, niente riempimento.
+                        strokeColor = lineColor.copy(alpha = 0.30f),
+                        strokeWidth = with(density) { 1.dp.toPx() },
+                        fillColor = androidx.compose.ui.graphics.Color.Transparent,
                     )
                     // Etichetta "5 min" in cima al cerchio (1° di latitudine ≈ 111 km).
                     MarkerComposable(
@@ -515,6 +713,63 @@ private fun loadLine(context: Context): List<LatLng> {
     }
 }
 
+/** Legge assets/pois.bin (punti di interesse da OpenStreetMap). */
+private fun loadPlaces(context: Context): List<Place> =
+    Places.parse(context.assets.open("pois.bin").use { it.readBytes() })
+
+/**
+ * Icona di un punto di interesse, SENZA sfondo (scelta dell'utente: niente tondino).
+ * Farmacia = croce verde disegnata a mano (come le insegne); gli altri tipi =
+ * la loro emoji, con un'ombra leggerissima per staccarla dalla mappa.
+ * Disegnata una volta sola per tipo.
+ */
+private fun placeIcon(kind: PlaceKind, night: Boolean, density: Float): BitmapDescriptor {
+    val size = (24 * density).toInt()
+    val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bmp)
+    val c = size / 2f
+    if (kind == PlaceKind.PHARMACY) {
+        // Croce greca: due bracci uguali, spessore 1/3 della misura.
+        val arm = 8f * density   // metà lunghezza di un braccio
+        val half = 2.8f * density // metà spessore
+        val cross = android.graphics.Path().apply {
+            addRect(c - arm, c - half, c + arm, c + half, android.graphics.Path.Direction.CW)
+            addRect(c - half, c - arm, c + half, c + arm, android.graphics.Path.Direction.CW)
+            op(android.graphics.Path().apply { addRect(c - arm, c - half, c + arm, c + half, android.graphics.Path.Direction.CW) },
+                android.graphics.Path.Op.UNION)
+        }
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        // Bordino chiaro (scuro di notte) per non perdersi sulle strade.
+        paint.style = android.graphics.Paint.Style.STROKE
+        paint.strokeWidth = 2f * density
+        paint.strokeJoin = android.graphics.Paint.Join.ROUND
+        paint.color = (if (night) CardDark else Card).toArgb()
+        canvas.drawPath(cross, paint)
+        paint.style = android.graphics.Paint.Style.FILL
+        paint.color = PHARMACY_GREEN
+        canvas.drawPath(cross, paint)
+    } else {
+        val text = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = 17 * density
+            textAlign = android.graphics.Paint.Align.CENTER
+            setShadowLayer(1.5f * density, 0f, 0.5f * density, android.graphics.Color.argb(90, 0, 0, 0))
+        }
+        canvas.drawText(kind.emoji, c, c - (text.descent() + text.ascent()) / 2, text)
+    }
+    return BitmapDescriptorFactory.fromBitmap(bmp)
+}
+
+/** Verde delle insegne delle farmacie. */
+private const val PHARMACY_GREEN = 0xFF1E9E4A.toInt()
+
+/** Da questo zoom in su compaiono i punti di interesse (15 ≈ isolato). */
+private const val PLACES_MIN_ZOOM = 15f
+/** Al massimo tanti punti di interesse disegnati insieme (i più vicini al centro). */
+private const val PLACES_MAX = 150
+
+/** Durata dell'animazione del percorso che cresce dal pallino alla stazione. */
+private const val ROUTE_DRAW_MS = 800
+
 /** Cerchi intorno all'utente: minuti a piedi o in bici. */
 private val WALK_MINUTES = listOf(5, 10, 15)
 /** Oltre questa distanza dalla stazione più vicina, niente zoom automatico. */
@@ -543,20 +798,56 @@ private fun WalkLabel(text: String, night: Boolean) {
         text,
         modifier = Modifier
             .background(if (night) CardDark else Card, androidx.compose.foundation.shape.RoundedCornerShape(50))
-            .padding(horizontal = 6.dp, vertical = 1.dp),
-        fontSize = 11.sp,
-        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-        color = if (night) BlueDark else Blue,
+            .padding(horizontal = 5.dp, vertical = 0.dp),
+        fontSize = 10.sp,
+        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+        color = (if (night) BlueDark else Blue).copy(alpha = 0.8f),
     )
+}
+
+/** Etichetta del percorso suggerito: come quelle dei cerchi, ma grigia come il tratteggio. */
+@Composable
+private fun RouteLabel(text: String, night: Boolean) {
+    androidx.compose.material3.Text(
+        text,
+        modifier = Modifier
+            .background(if (night) CardDark else Card, androidx.compose.foundation.shape.RoundedCornerShape(50))
+            .padding(horizontal = 7.dp, vertical = 2.dp),
+        fontSize = 12.sp,
+        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+        color = if (night) GreyDark else Grey,
+    )
+}
+
+/**
+ * I primi [meters] metri del percorso [points] ([cumulative] = metri fino a ogni
+ * punto): i punti interi più un ultimo punto interpolato a metà tratto.
+ */
+private fun routePrefix(points: List<GeoPoint>, cumulative: DoubleArray, meters: Double): List<LatLng> {
+    val out = ArrayList<LatLng>()
+    out.add(LatLng(points[0].lat, points[0].lon))
+    for (i in 1 until points.size) {
+        if (cumulative[i] <= meters) {
+            out.add(LatLng(points[i].lat, points[i].lon))
+        } else {
+            val seg = cumulative[i] - cumulative[i - 1]
+            val t = if (seg > 0) (meters - cumulative[i - 1]) / seg else 0.0
+            val a = points[i - 1]
+            val b = points[i]
+            out.add(LatLng(a.lat + (b.lat - a.lat) * t, a.lon + (b.lon - a.lon) * t))
+            break
+        }
+    }
+    return out
 }
 
 /** Nome della stazione accanto al pallino, su fondino arrotondato. */
 @Composable
-private fun StationName(name: String, selected: Boolean, night: Boolean) {
+private fun StationName(name: String, selected: Boolean, night: Boolean, startPadding: Int = 14) {
     androidx.compose.material3.Text(
         name,
         modifier = Modifier
-            .padding(start = 14.dp)
+            .padding(start = startPadding.dp)
             .background(if (night) CardDark else Card, androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
             .padding(horizontal = 6.dp, vertical = 2.dp),
         fontSize = 12.sp,

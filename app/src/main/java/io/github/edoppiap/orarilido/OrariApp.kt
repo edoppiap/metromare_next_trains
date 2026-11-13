@@ -1,6 +1,9 @@
 package io.github.edoppiap.orarilido
 
 import android.app.Application
+import android.os.Process
+import android.os.SystemClock
+import android.util.Log
 import io.github.edoppiap.orarilido.data.ScheduleRepository
 import io.github.edoppiap.orarilido.data.SavedPrefs
 import io.github.edoppiap.orarilido.data.StationPrefs
@@ -41,4 +44,13 @@ class OrariApp : Application() {
         schedule = appScope.async { ScheduleRepository(this@OrariApp).load() }
         savedPrefs = appScope.async(Dispatchers.IO) { stationPrefs.load() }
     }
+}
+
+/**
+ * Scrive nel log (tag "OrariAvvio") quanti ms sono passati dall'avvio del
+ * processo. Serve solo a noi per misurare l'apertura: adb logcat -s OrariAvvio
+ */
+fun logStartup(what: String) {
+    val ms = SystemClock.elapsedRealtime() - Process.getStartElapsedRealtime()
+    Log.i("OrariAvvio", "$what dopo $ms ms dall'avvio del processo")
 }
