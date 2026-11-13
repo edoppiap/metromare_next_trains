@@ -76,6 +76,7 @@ class MainActivity : ComponentActivity() {
                         onToggleFavorite = viewModel::toggleFavorite,
                         onTravelMode = viewModel::setTravelMode,
                         onMenu = { infoPage = InfoPage.MENU },
+                        overlayOpen = day != null || infoPage != null,
                     )
                     // Giornata: entra da destra. "lastDay" la tiene disegnata mentre esce.
                     var lastDay by remember { mutableStateOf(day) }

@@ -1,6 +1,12 @@
 package io.github.edoppiap.orarilido.ui
 
+import android.app.Activity
 import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -84,6 +90,8 @@ fun MainScreen(
     onToggleFavorite: (String) -> Unit,
     onTravelMode: (TravelMode) -> Unit,
     onMenu: () -> Unit,
+    /** C'è una pagina sopra (giornata, menu): conta il suo sfondo per la barra di stato. */
+    overlayOpen: Boolean = false,
 ) {
     if (!state.ready) return  // dura pochi ms: la finestra resta sullo sfondo
 
@@ -112,6 +120,21 @@ fun MainScreen(
 
     // "Indietro" con la tendina tutta su o tutta giù la riporta a metà invece di chiudere l'app.
     BackHandler(enabled = sheet.stop != SheetStop.HALF) { sheet.animateTo(SheetStop.HALF) }
+
+    // ---- Icone della barra di stato (ora, batteria) ----
+    // Devono contrastare con quello che c'è DIETRO, non col tema del telefono:
+    // di giorno con il telefono in tema scuro, icone bianche sulla mappa chiara non si leggono.
+    // Dietro c'è la mappa, salvo quando la tendina (o una pagina sopra) arriva in cima.
+    val statusBarPx = WindowInsets.statusBars.getTop(density)
+    val sheetUnderStatusBar by remember { derivedStateOf { sheet.offset < statusBarPx } }
+    val appIsLight = MaterialTheme.colorScheme.background.luminance() > 0.5f
+    val lightIcons = if (overlayOpen || sheetUnderStatusBar) !appIsLight else state.mapNight
+    val view = LocalView.current
+    SideEffect {
+        val window = (view.context as? Activity)?.window ?: return@SideEffect
+        // "Appearance light" = sfondo chiaro, quindi icone SCURE.
+        WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !lightIcons
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val screenHeight = maxHeight
