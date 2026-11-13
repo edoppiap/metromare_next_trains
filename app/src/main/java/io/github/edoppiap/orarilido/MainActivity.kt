@@ -1,6 +1,7 @@
 package io.github.edoppiap.orarilido
 
 import android.Manifest
+import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import android.os.Process
 import android.os.SystemClock
@@ -30,6 +31,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import io.github.edoppiap.orarilido.location.LocationSource
+import io.github.edoppiap.orarilido.schedule.Direction
 import io.github.edoppiap.orarilido.ui.DayScreen
 import io.github.edoppiap.orarilido.ui.InfoPage
 import io.github.edoppiap.orarilido.ui.InfoScreen
@@ -39,6 +41,7 @@ import io.github.edoppiap.orarilido.ui.theme.OrariTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -75,6 +78,8 @@ class MainActivity : ComponentActivity() {
                         onModeChange = viewModel::setMode,
                         onToggleFavorite = viewModel::toggleFavorite,
                         onTravelMode = viewModel::setTravelMode,
+                        onExitGo = viewModel::exitGo,
+                        onPinStop = viewModel::togglePinnedStop,
                         onMenu = { infoPage = InfoPage.MENU },
                         overlayOpen = day != null || infoPage != null,
                     )
@@ -114,7 +119,9 @@ class MainActivity : ComponentActivity() {
                             },
                             label = "infoPages",
                         ) { page ->
-                            InfoScreen(page, onNavigate = { infoPage = it })
+                            InfoScreen(page, onNavigate = { infoPage = it }, debugActions = debugActions(state.simulating) {
+                                infoPage = null  // si chiude il menu per vedere la simulazione
+                            })
                         }
                     }
                 }
@@ -128,8 +135,10 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 locationGranted.value = locationSource.hasPermission()  // può cambiare dalle Impostazioni
-                locationGranted.collectLatest { granted ->
-                    if (granted) locationSource.updates().collect { viewModel.onLocation(it) }
+                // Se cambia il permesso o la frequenza voluta dalla modalità Go,
+                // il GPS si riavvia con le impostazioni nuove.
+                combine(locationGranted, viewModel.fastGps, ::Pair).collectLatest { (granted, fast) ->
+                    if (granted) locationSource.updates(fast).collect { viewModel.onLocation(it) }
                 }
             }
         }
@@ -146,6 +155,24 @@ class MainActivity : ComponentActivity() {
                     delay(minOf(20_000, toNextMinute + 50))  // +50 ms: per sicurezza oltre il minuto
                 }
             }
+        }
+    }
+
+    /**
+     * Voci in più nel menu, SOLO nella build di prova (debug): il simulatore
+     * di viaggio per provare la modalità Go da casa. Nella build per la
+     * famiglia (release) la lista è vuota e il menu non cambia.
+     */
+    private fun debugActions(simulating: Boolean, closeMenu: () -> Unit): List<Pair<String, () -> Unit>> {
+        val debuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (!debuggable) return emptyList()
+        return if (simulating) {
+            listOf("Ferma la simulazione" to { viewModel.stopSimulation(); closeMenu() })
+        } else {
+            listOf(
+                "Simula viaggio verso Ostia (da Vitinia)" to { viewModel.simulateRide(Direction.TO_OSTIA); closeMenu() },
+                "Simula viaggio verso Roma (da Lido Centro)" to { viewModel.simulateRide(Direction.TO_ROMA); closeMenu() },
+            )
         }
     }
 

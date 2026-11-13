@@ -8,6 +8,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,7 +29,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.AnimatedVisibility
@@ -51,6 +52,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.lerp
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,6 +96,10 @@ fun MainScreen(
     onToggleFavorite: (String) -> Unit,
     onTravelMode: (TravelMode) -> Unit,
     onMenu: () -> Unit,
+    /** Pulsante X: esci dalla modalità Go. */
+    onExitGo: () -> Unit = {},
+    /** Tocco sulla scheda di una fermata in Go: la fissa nella striscia. */
+    onPinStop: (String) -> Unit = {},
     /** C'è una pagina sopra (giornata, menu): conta il suo sfondo per la barra di stato. */
     overlayOpen: Boolean = false,
 ) {
@@ -112,11 +122,20 @@ fun MainScreen(
         circlesByTap = null
         if (!fullMap) circlesHeldBack = false
     }
-    val circlesOn = circlesByTap ?: (fullMap && !circlesHeldBack)
+    // Modalità Go attiva (sul treno, non solo "sto riconoscendo"): i cerchi
+    // a piedi/in bici non servono, al loro posto in alto c'è la X.
+    val goActive = state.go?.recognizing == false
+    val circlesOn = !goActive && (circlesByTap ?: (fullMap && !circlesHeldBack))
     // Direzione scelta a mano nella striscia a mappa piena, e per quale stazione.
     // Vale solo per quella stazione: se cambia, si torna alla direzione predefinita.
     var stripChoiceStation by rememberSaveable { mutableStateOf<String?>(null) }
     var stripChoiceDirection by rememberSaveable { mutableStateOf(Direction.TO_ROMA) }
+
+    // Quando la tendina inizia a scendere verso la mappa piena, la lista torna
+    // in cima: è la prima scheda (con l'intestazione, in Go) a diventare la striscia.
+    LaunchedEffect(Unit) {
+        snapshotFlow { sheet.collapseProgress > 0.02f }.collect { if (it) listState.animateScrollToItem(0) }
+    }
 
     // "Indietro" con la tendina tutta su o tutta giù la riporta a metà invece di chiudere l'app.
     BackHandler(enabled = sheet.stop != SheetStop.HALF) { sheet.animateTo(SheetStop.HALF) }
@@ -174,15 +193,23 @@ fun MainScreen(
                     onStationClick = { id ->
                         // Tocco su una stazione: la tendina (se serve) risale e scorre alla sua scheda.
                         if (fullMap) sheet.animateTo(SheetStop.HALF)
-                        val index = sheetItems(state).indexOfFirst { it is SheetItem.Card && it.card.stationId == id }
+                        val index = sheetItems(state).indexOfFirst {
+                            (it is SheetItem.Card && it.card.stationId == id) || (it is SheetItem.GoStop && it.stop.stationId == id)
+                        }
                         if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
                     },
                     onMenu = onMenu,
                     travelToggleVisible = state.userLocation != null && circlesOn,
                     onTravelMode = onTravelMode,
+                    goActive = goActive,
+                    onExitGo = onExitGo,
                 )
             },
-            strip = {
+            // La striscia compare solo a mappa piena: mentre la tendina scende è la
+            // prima scheda della lista a trasformarsi fino a diventare identica a lei
+            // (vedi StationCard). In Go niente striscia: resta la scheda rimpicciolita.
+            stripAtEndOnly = true,
+            strip = if (goActive) null else { {
                 val card = state.primaryCards.firstOrNull() ?: state.otherCards.firstOrNull()
                 if (card != null) CollapsedStrip(
                     card = card,
@@ -194,9 +221,21 @@ fun MainScreen(
                     },
                     onClick = { sheet.animateTo(SheetStop.HALF) },
                 )
-            },
+            } },
         ) {
-            SheetContent(state, listState, onOpenDay, onModeChange, onToggleFavorite)
+            val stripCard = state.primaryCards.firstOrNull() ?: state.otherCards.firstOrNull()
+            SheetContent(
+                state, listState, onOpenDay, onModeChange, onToggleFavorite, onPinStop,
+                collapse = { sheet.collapseProgress },
+                stripDirection = stripCard?.let {
+                    if (stripChoiceStation == it.stationId) stripChoiceDirection else defaultStripDirection(it.stationId)
+                },
+            )
+            // In Go a mappa piena: un tocco (anche sulla scheda) riporta la tendina
+            // a metà, come succede con la striscia normale.
+            if (goActive && fullMap) {
+                Box(Modifier.fillMaxSize().clickable { sheet.animateTo(SheetStop.HALF) })
+            }
         }
     }
 }
@@ -214,6 +253,8 @@ private fun MapLayer(
     onMenu: () -> Unit,
     travelToggleVisible: Boolean,
     onTravelMode: (TravelMode) -> Unit,
+    goActive: Boolean,
+    onExitGo: () -> Unit,
 ) {
     // Velocità: creare la mappa Google costa centinaia di ms. Per non
     // ritardare gli orari, al primo fotogramma c'è solo lo sfondo;
@@ -239,6 +280,8 @@ private fun MapLayer(
                 nearestStation = state.nearestStation,
                 travelMode = state.travelMode,
                 showCircles = showCircles,
+                goStations = if (goActive) state.go?.focusStations.orEmpty() else emptyList(),
+                goPinnedId = state.go?.stripStop?.takeIf { it.pinned }?.stationId,
                 onUserClick = onUserClick,
                 onMapGesture = onMapGesture,
                 onStationClick = onStationClick,
@@ -256,8 +299,14 @@ private fun MapLayer(
             MapButton(onClick = onMenu) { MenuIcon(MaterialTheme.colorScheme.onSurface) }
             Spacer(Modifier.weight(1f))
             // Il selettore serve solo quando ci sono i cerchi (mappa piena, posizione nota).
-            AnimatedVisibility(visible = travelToggleVisible, enter = fadeIn(), exit = fadeOut()) {
-                TravelToggle(state.travelMode, onTravelMode)
+            // In Go al suo posto c'è la X per uscire (i cerchi in treno non servono).
+            Box(contentAlignment = Alignment.CenterEnd) {
+                androidx.compose.animation.AnimatedVisibility(visible = travelToggleVisible && !goActive, enter = fadeIn(), exit = fadeOut()) {
+                    TravelToggle(state.travelMode, onTravelMode)
+                }
+                androidx.compose.animation.AnimatedVisibility(visible = goActive, enter = fadeIn(), exit = fadeOut()) {
+                    MapButton(onClick = onExitGo) { CloseIcon(MaterialTheme.colorScheme.onSurface) }
+                }
             }
         }
     }
@@ -367,10 +416,40 @@ private sealed interface SheetItem {
     data class Card(val card: StationCardUi, val primary: Boolean) : SheetItem {
         override val key = (if (primary) "p_" else "o_") + card.stationId
     }
+    // Modalità Go
+    data object GoRecognizing : SheetItem { override val key = "go_recognizing" }
+    data class GoHeader(val directionTitle: String, val showHint: Boolean, val showNextLabel: Boolean) : SheetItem {
+        override val key = "go_header"
+    }
+    data object GoAheadHeader : SheetItem { override val key = "go_ahead_header" }
+    /** [morph] = è la prima scheda: a mappa piena resta, rimpicciolita (le altre svaniscono). */
+    data class GoStop(val stop: GoStopUi, val next: Boolean, val morph: Boolean = false) : SheetItem {
+        override val key = "go_" + stop.stationId
+    }
 }
 
 /** La lista degli elementi della tendina: serve sia per disegnarla sia per trovare una scheda. */
 private fun sheetItems(state: MainUiState): List<SheetItem> = buildList {
+    val go = state.go
+    // In treno: solo le fermate davanti, al posto di tutte le schede.
+    if (go != null && !go.recognizing) {
+        val pinned = go.stops.firstOrNull { it.pinned }
+        val next = go.stops.firstOrNull()
+        val first = pinned ?: next
+        add(SheetItem.GoHeader(go.directionTitle, showHint = pinned == null, showNextLabel = first == next && pinned == null))
+        // La fermata fissata va "in primo piano", in cima; le altre sotto, in ordine.
+        // Stessa chiave della scheda: così sale in cima scivolando invece di sparire e ricomparire.
+        if (pinned != null) {
+            add(SheetItem.GoStop(pinned, next = pinned == next, morph = true))
+            add(SheetItem.GoAheadHeader)
+        }
+        go.stops.filter { it != pinned }.forEach {
+            add(SheetItem.GoStop(it, next = it == next, morph = pinned == null && it == next))
+        }
+        return@buildList
+    }
+    // Sembra un treno: una riga in cima, le schede normali restano sotto.
+    if (go != null) add(SheetItem.GoRecognizing)
     add(SheetItem.PrimaryHeader)
     if (state.primaryCards.isEmpty()) add(SheetItem.FavoritesHint)
     state.primaryCards.forEach { add(SheetItem.Card(it, primary = true)) }
@@ -385,9 +464,18 @@ private fun SheetContent(
     onOpenDay: (String, Direction) -> Unit,
     onModeChange: (PrimaryMode) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onPinStop: (String) -> Unit,
+    /** Quanto è scesa la tendina verso la mappa piena (0–1): la prima scheda si trasforma. */
+    collapse: () -> Float = { 0f },
+    /** Direzione mostrata nella striscia: la riga che resta nella scheda che si trasforma. */
+    stripDirection: Direction? = null,
 ) {
-    // Quando cambia la modalità, torna in cima alla lista.
-    LaunchedEffect(state.mode) { listState.scrollToItem(0) }
+    // Quando cambia la modalità (o si entra/esce da Go), torna in cima alla lista.
+    val goActive = state.go?.recognizing == false
+    LaunchedEffect(state.mode, goActive) { listState.scrollToItem(0) }
+    // Fissando una fermata in Go, la lista torna in cima: lì c'è la scheda appena fissata.
+    val pinnedId = state.go?.stops?.firstOrNull { it.pinned }?.stationId
+    LaunchedEffect(pinnedId) { if (pinnedId != null) listState.animateScrollToItem(0) }
 
     LazyColumn(
         Modifier
@@ -398,11 +486,24 @@ private fun SheetContent(
             start = 12.dp,
             end = 12.dp,
             // In fondo, spazio per la barra di navigazione di Android.
-            bottom = 24.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
+            bottom = 14.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
         ),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        // Niente spazio automatico tra gli elementi: ognuno ha il suo sotto di sé
+        // (vedi il Box qui sotto), così chi si chiude porta via anche il proprio spazio.
     ) {
-        items(sheetItems(state), key = { it.key }) { item ->
+        val items = sheetItems(state)
+        // La scheda che a mappa piena diventa la striscia: in Go quella segnata,
+        // altrimenti la prima scheda di stazione (in primo piano, o la prima delle altre).
+        val morphIndex = items.indexOfFirst { it is SheetItem.Card || (it is SheetItem.GoStop && it.morph) }
+        itemsIndexed(items, key = { _, it -> it.key }) { index, item ->
+            val isGo = item is SheetItem.GoHeader || item is SheetItem.GoAheadHeader || item is SheetItem.GoStop
+            val role = when {
+                index == morphIndex || item is SheetItem.GoHeader -> Modifier       // resta (e si trasforma)
+                index < morphIndex -> Modifier.collapseHeight(collapse)            // sopra: si chiude
+                else -> Modifier.fadeOnCollapse(collapse)                          // sotto: svanisce
+            }
+            // In Go le schede scivolano al nuovo posto quando ne fissi una.
+            Box((if (isGo) Modifier.animateItem() else Modifier).then(role).padding(bottom = 10.dp)) {
             when (item) {
                 SheetItem.PrimaryHeader -> PrimaryHeader(state.mode, onModeChange)
                 SheetItem.FavoritesHint -> FavoritesHint()
@@ -411,11 +512,186 @@ private fun SheetContent(
                     card = item.card,
                     onOpenDay = { direction -> onOpenDay(item.card.stationId, direction) },
                     onToggleFavorite = { onToggleFavorite(item.card.stationId) },
+                    morph = if (index == morphIndex) collapse else null,
+                    keptDirection = stripDirection,
                 )
+                SheetItem.GoRecognizing -> GoRecognizingRow()
+                is SheetItem.GoHeader -> GoHeader(item.directionTitle, item.showHint, item.showNextLabel, collapse)
+                SheetItem.GoAheadHeader -> GoAheadHeader()
+                is SheetItem.GoStop -> GoStopCard(
+                    item.stop,
+                    item.next,
+                    onClick = { onPinStop(item.stop.stationId) },
+                    collapse = if (item.morph) collapse else null,
+                )
+            }
             }
         }
     }
 }
+
+// ---- Modalità Go ----
+
+/** "⟳ Sei in treno? Sto riconoscendo la corsa…": compare per 15–30 s prima di Go. */
+@Composable
+private fun GoRecognizingRow() {
+    SheetCard {
+        Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "Sei in treno? Sto riconoscendo la corsa…",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+/**
+ * In treno  [Verso Ostia]
+ * Arrivi stimati da dove sei, coi tempi dell'orario programmato.
+ */
+@Composable
+private fun GoHeader(directionTitle: String, showHint: Boolean, showNextLabel: Boolean, collapse: () -> Float) {
+    Column(Modifier.padding(start = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "In treno",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Spacer(Modifier.width(10.dp))
+            DirectionPill(directionTitle)
+            Spacer(Modifier.weight(1f))
+            // A mappa piena "Prossima fermata" sta qui (nella scheda non c'è più posto).
+            if (showNextLabel) {
+                Text(
+                    "Prossima fermata",
+                    modifier = Modifier.padding(end = 4.dp).graphicsLayer { alpha = collapse() },
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Text(
+            "Arrivi stimati da dove sei, coi tempi dell'orario programmato." +
+                if (showHint) "\nTocca la tua fermata per tenerla in vista." else "",
+            modifier = Modifier.collapseHeight(collapse).padding(top = 6.dp),
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** Scendendo verso la mappa piena svanisce (a metà discesa è già sparito). */
+private fun Modifier.fadeOnCollapse(collapse: () -> Float) =
+    graphicsLayer { alpha = (1f - collapse() * 2f).coerceIn(0f, 1f) }
+
+/** Scendendo verso la mappa piena si chiude in altezza e svanisce. */
+private fun Modifier.collapseHeight(collapse: () -> Float) = this
+    .graphicsLayer { alpha = (1f - collapse() * 2f).coerceIn(0f, 1f) }
+    .clipToBounds()
+    .layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints)
+        val h = (placeable.height * (1f - collapse())).toInt()
+        layout(placeable.width, h) { placeable.place(0, 0) }
+    }
+
+/**
+ * Scheda di una fermata davanti:
+ *   Lido Centro                 12 min
+ *   Prossima fermata             08:29
+ * (bordo azzurro = fermata fissata)
+ * Tocco = la fissa nella striscia a mappa piena (di nuovo = la sblocca).
+ */
+@Composable
+private fun GoStopCard(
+    stop: GoStopUi,
+    next: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** Solo per la prima scheda: quanto rimpicciolirla (0 = normale, 1 = striscia a mappa piena). */
+    collapse: (() -> Float)? = null,
+) {
+    val colors = MaterialTheme.colorScheme
+    // Letto qui: a ogni fotogramma della discesa si ridisegna solo questa scheda.
+    val p = collapse?.invoke() ?: 0f
+    val shape = RoundedCornerShape(lerp(20.dp, 16.dp, p))
+    // Bordo blu sulla fermata fissata (compare in dissolvenza).
+    val border by androidx.compose.animation.animateColorAsState(
+        if (stop.pinned) colors.primary else colors.surface, label = "pinBorder",
+    )
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(colors.surface)
+            .border(2.dp, border, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = lerp(16.dp, 14.dp, p), vertical = lerp(12.dp, 6.dp, p)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                stop.name,
+                fontSize = lerp(20.sp, 18.sp, p),
+                fontWeight = FontWeight.Bold,
+                color = colors.onSurface,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            // "La tua fermata" non serve scriverlo: lo dice il bordo azzurro.
+            if (next) {
+                Text(
+                    "Prossima fermata",
+                    // a mappa piena si chiude: la scritta passa nell'intestazione
+                    modifier = if (collapse != null) Modifier.collapseHeight(collapse) else Modifier,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+        }
+        WaitAndClock(
+            wait = {
+                Text(
+                    waitText(stop.row),
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (stop.row.imminent) colors.tertiary else colors.onSurface,
+                    maxLines = 1,
+                )
+            },
+            dot = { Text(" · ", fontSize = lerp(13.sp, 14.sp, p), color = colors.onSurfaceVariant, maxLines = 1) },
+            clock = { Text(stop.row.clock, fontSize = lerp(13.sp, 14.sp, p), color = colors.onSurfaceVariant, maxLines = 1) },
+            inline = p,
+        )
+    }
+}
+
+/** Divisorio "Fermate davanti", sotto la fermata fissata. */
+@Composable
+private fun GoAheadHeader(modifier: Modifier = Modifier) {
+    Column(modifier.padding(top = 8.dp)) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Text(
+            "Fermate davanti",
+            modifier = Modifier.padding(start = 4.dp, top = 10.dp),
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+    }
+}
+
 
 /** "In primo piano          [📍 Vicina | ⭐ Preferite]" */
 @Composable
@@ -491,31 +767,66 @@ private fun SheetCard(content: @Composable () -> Unit) {
     ) { content() }
 }
 
-/** Scheda di una stazione: nome e stella, poi una riga per direzione. */
+/**
+ * Scheda di una stazione: nome e stella, poi una riga per direzione.
+ *
+ * Con [morph] (solo la scheda che a mappa piena diventa la striscia) la scheda
+ * si trasforma mentre la tendina scende: 0 = scheda normale, 1 = IDENTICA alla
+ * striscia ([CollapsedStrip]), che a quel punto le si sostituisce senza che si
+ * veda. Gli stili delle due restano quelli: qui si passa dall'uno all'altro.
+ *   - sfondo della scheda che svanisce, margini che diventano quelli della striscia;
+ *   - nome e orari che si rimpiccioliscono, stella che si chiude;
+ *   - la riga dell'altra direzione che si chiude ([keptDirection] = quella della striscia);
+ *   - la pillola "Verso Roma" che sfuma nel selettore [Ostia | Roma].
+ */
 @Composable
 private fun StationCard(
     card: StationCardUi,
     onOpenDay: (Direction) -> Unit,
     onToggleFavorite: () -> Unit,
+    morph: (() -> Float)? = null,
+    keptDirection: Direction? = null,
 ) {
     val colors = MaterialTheme.colorScheme
-    SheetCard {
+    // Letto qui: a ogni fotogramma della discesa si ridisegna solo questa scheda.
+    val p = morph?.invoke() ?: 0f
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(colors.surface.copy(alpha = colors.surface.alpha * (1f - p)))
+            .padding(
+                start = lerp(16.dp, 8.dp, p),   // + 12 dp della lista = 20 dp della striscia
+                end = lerp(8.dp, 0.dp, p),      // + 12 dp della lista = 12 dp della striscia
+                top = lerp(8.dp, 2.dp, p),
+                bottom = lerp(14.dp, 4.dp, p),
+            ),
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 card.name,
                 modifier = Modifier.weight(1f),
-                fontSize = 20.sp,
+                fontSize = lerp(20.sp, 17.sp, p),
                 fontWeight = FontWeight.Bold,
-                color = colors.onSurface,
+                color = androidx.compose.ui.graphics.lerp(colors.onSurface, colors.onBackground, p),
+                // La striscia ha una riga sola; la scheda ferma va a capo come sempre.
+                maxLines = if (p > 0f) 1 else Int.MAX_VALUE,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
             // Distanza dall'utente in linea d'aria (solo se la posizione è nota).
             card.distance?.let {
-                Text(it, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurfaceVariant)
+                Text(
+                    it,
+                    fontSize = lerp(14.sp, 13.sp, p),
+                    fontWeight = androidx.compose.ui.text.font.lerp(FontWeight.SemiBold, FontWeight.Normal, p),
+                    color = colors.onSurfaceVariant,
+                )
             }
-            // Stella: piena e blu se preferita, vuota e grigia altrimenti.
+            // Stella: piena e blu se preferita, vuota e grigia altrimenti. Nella striscia non c'è: si chiude.
             Text(
                 if (card.favorite) "★" else "☆",
                 modifier = Modifier
+                    .collapseBoth(p)
                     .clip(RoundedCornerShape(50))
                     .clickable(onClick = onToggleFavorite)
                     .padding(horizontal = 12.dp, vertical = 6.dp),
@@ -523,48 +834,131 @@ private fun StationCard(
                 color = if (card.favorite) colors.primary else colors.onSurfaceVariant,
             )
         }
-        Column(Modifier.padding(end = 8.dp)) {
+        // Spazio tra nome e orari: nella striscia c'è, nella scheda lo fa la stella.
+        Spacer(Modifier.height(lerp(0.dp, 6.dp, p)))
+        Column(Modifier.padding(end = lerp(8.dp, 0.dp, p))) {
             card.blocks.forEachIndexed { i, block ->
-                if (i > 0) HorizontalDivider(Modifier.padding(vertical = 8.dp), color = colors.outlineVariant)
-                CompactDirectionRow(block, onClick = { onOpenDay(block.direction) })
+                // La riga che resta nella striscia; ai capolinea c'è solo quella.
+                val kept = card.blocks.size == 1 || block.direction == keptDirection
+                if (i > 0) {
+                    HorizontalDivider(
+                        Modifier.collapseHeight { p }.padding(vertical = 8.dp),
+                        color = colors.outlineVariant,
+                    )
+                }
+                CompactDirectionRow(
+                    block,
+                    onClick = { onOpenDay(block.direction) },
+                    modifier = if (kept) Modifier else Modifier.collapseHeight { p },
+                    morph = if (kept) p else 0f,
+                    stripToggle = card.blocks.size > 1,
+                )
             }
         }
     }
 }
 
 /** [Verso Roma]   3 min    18 min    33 min
- *                 08:03    08:18     08:33   */
+ *                 08:03    08:18     08:33
+ * Con [morph] > 0 diventa la riga della striscia: la pillola sfuma nel selettore
+ * [Ostia | Roma] (o, ai capolinea, nella pillola corta), caratteri un po' più piccoli. */
 @Composable
-private fun CompactDirectionRow(block: DirectionBlock, onClick: () -> Unit) {
+private fun CompactDirectionRow(
+    block: DirectionBlock,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    morph: Float = 0f,
+    stripToggle: Boolean = false,
+) {
+    val p = morph
+    val colors = MaterialTheme.colorScheme
     // Tutta la riga è toccabile: apre gli orari della giornata per questa direzione.
     Row(
-        Modifier
+        modifier
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
-            .padding(vertical = 2.dp),
+            .padding(vertical = lerp(2.dp, 0.dp, p)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        DirectionPill(block.title, Modifier.width(112.dp))
+        PillToToggle(
+            p = p,
+            pill = { DirectionPill(block.title, Modifier.width(112.dp)) },
+            target = {
+                // Lo stesso aspetto della striscia (lì è vero e toccabile, qui solo disegnato).
+                if (stripToggle) {
+                    SegmentedToggle(
+                        options = listOf(Direction.TO_OSTIA to "Ostia", Direction.TO_ROMA to "Roma"),
+                        selected = block.direction,
+                        onSelect = {},
+                        segmentPadding = 10.dp,
+                    )
+                } else {
+                    DirectionPill(block.title.removePrefix("Verso "))
+                }
+            },
+        )
         Spacer(Modifier.width(12.dp))
         block.rows.forEachIndexed { i, row ->
             Column(Modifier.weight(if (i == 0) 1.3f else 1f)) {
                 Text(
                     waitText(row),
-                    fontSize = if (i == 0) 22.sp else 16.sp,
+                    fontSize = if (i == 0) lerp(22.sp, 20.sp, p) else lerp(16.sp, 15.sp, p),
                     fontWeight = if (i == 0) FontWeight.Bold else FontWeight.SemiBold,
-                    color = if (row.imminent) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurface,
+                    color = if (row.imminent) colors.tertiary
+                        else androidx.compose.ui.graphics.lerp(colors.onSurface, colors.onBackground, p),
                     maxLines = 1,
                 )
                 Text(
                     clockText(row),
                     fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.onSurfaceVariant,
                     maxLines = 1,
                 )
             }
         }
     }
 }
+
+/**
+ * La pillola della scheda che diventa il selettore della striscia: occupano lo
+ * stesso posto, la larghezza passa dall'una all'altro e intanto sfumano.
+ * Ferma (p = 0 o 1) c'è solo una delle due: così il selettore disegnato non
+ * ruba i tocchi alla riga.
+ */
+@Composable
+private fun PillToToggle(p: Float, pill: @Composable () -> Unit, target: @Composable () -> Unit) {
+    androidx.compose.ui.layout.Layout(
+        content = {
+            if (p < 1f) Box(Modifier.graphicsLayer { alpha = 1f - p }) { pill() }
+            if (p > 0f) Box(Modifier.graphicsLayer { alpha = p }) { target() }
+        },
+    ) { measurables, constraints ->
+        val free = constraints.copy(minWidth = 0, minHeight = 0)
+        val placeables = measurables.map { it.measure(free) }
+        val a = if (p < 1f) placeables.first() else null
+        val b = if (p > 0f) placeables.last() else null
+        fun mix(x: Int?, y: Int?) = when {
+            x == null -> y!!
+            y == null -> x
+            else -> (x + (y - x) * p).toInt()
+        }
+        val width = mix(a?.width, b?.width)
+        val height = mix(a?.height, b?.height)
+        layout(width, height) {
+            a?.place(0, (height - a.height) / 2)
+            b?.place(0, (height - b.height) / 2)
+        }
+    }
+}
+
+/** Si chiude in larghezza e in altezza (e svanisce): la stella che nella striscia non c'è. */
+private fun Modifier.collapseBoth(p: Float) = this
+    .graphicsLayer { alpha = (1f - p * 2f).coerceIn(0f, 1f) }
+    .clipToBounds()
+    .layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints)
+        layout((placeable.width * (1f - p)).toInt(), (placeable.height * (1f - p)).toInt()) { placeable.place(0, 0) }
+    }
 
 @Composable
 private fun DirectionPill(
@@ -662,4 +1056,51 @@ private fun TravelToggle(mode: TravelMode, onChange: (TravelMode) -> Unit) {
         onSelect = onChange,
         fontSize = 18.sp,
     )
+}
+
+/**
+ * Minuti e orario d'arrivo di una scheda Go, che cambiano disposizione con [inline]:
+ *   0 (tendina a metà)        1 (mappa piena)
+ *        12 min               12 min · 08:29
+ *         08:29
+ * Per i valori in mezzo (tendina che scende) l'orario scivola da sotto a
+ * fianco e il "·" compare in dissolvenza: niente salti.
+ */
+@Composable
+private fun WaitAndClock(
+    wait: @Composable () -> Unit,
+    dot: @Composable () -> Unit,
+    clock: @Composable () -> Unit,
+    inline: Float,
+) {
+    androidx.compose.ui.layout.Layout(
+        contents = listOf(wait, { Box(Modifier.graphicsLayer { alpha = inline }) { dot() } }, clock),
+    ) { (waitM, dotM, clockM), constraints ->
+        val free = constraints.copy(minWidth = 0, minHeight = 0)
+        val w = waitM.first().measure(free)
+        val d = dotM.first().measure(free)
+        val c = clockM.first().measure(free)
+        fun lerpInt(a: Int, b: Int) = (a + (b - a) * inline).toInt()
+        val first = androidx.compose.ui.layout.FirstBaseline
+
+        // Impilati: tutto allineato a destra, orario sotto i minuti.
+        val stackedWidth = maxOf(w.width, c.width)
+        val stackedHeight = w.height + c.height
+        // In linea: minuti, "·", orario, sulla stessa linea di base del testo.
+        val inlineWidth = w.width + d.width + c.width
+        val inlineHeight = w.height
+        val width = lerpInt(stackedWidth, inlineWidth)
+        val height = lerpInt(stackedHeight, inlineHeight)
+
+        layout(width, height) {
+            // I minuti restano attaccati al bordo destro meno quello che serve all'orario in linea.
+            val waitX = lerpInt(width - w.width, 0)
+            w.place(waitX, 0)
+            val dotX = waitX + w.width
+            d.place(dotX, w[first] - d[first])
+            val clockX = lerpInt(width - c.width, dotX + d.width)
+            val clockY = lerpInt(w.height, w[first] - c[first])
+            c.place(clockX, clockY)
+        }
+    }
 }

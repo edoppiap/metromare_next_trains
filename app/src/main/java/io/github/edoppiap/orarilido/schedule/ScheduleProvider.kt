@@ -42,6 +42,12 @@ interface ScheduleProvider {
      */
     fun departuresForDay(stationId: String, direction: Direction, serviceDate: LocalDate): List<Departure>
 
+    /**
+     * Minuti di viaggio dal capolinea di partenza a ogni stazione (per indice),
+     * in quella direzione. Uguali per tutte le corse: li usa la modalità Go.
+     */
+    fun minutesFromTerminus(direction: Direction): IntArray
+
     /** Feriale, sabato o festivo: quale tabella vale in quella data. */
     fun dayTypeOf(date: LocalDate): DayType
 }

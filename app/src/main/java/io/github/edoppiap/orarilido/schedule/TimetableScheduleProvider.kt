@@ -72,6 +72,9 @@ class TimetableScheduleProvider(private val timetable: Timetable) : ScheduleProv
             .sortedBy { it.time }  // le corse aggiuntive sono in coda alla lista: riordiniamo
     }
 
+    override fun minutesFromTerminus(direction: Direction): IntArray =
+        timetable.minutesFromTerminus.getValue(direction).copyOf()  // copia: nessuno può modificare l'orario
+
     /** Quale tabella vale in una certa data. */
     override fun dayTypeOf(date: LocalDate): DayType = when {
         date in timetable.holidays -> DayType.HOLIDAY

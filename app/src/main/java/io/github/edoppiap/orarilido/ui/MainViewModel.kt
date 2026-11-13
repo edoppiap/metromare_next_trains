@@ -14,6 +14,17 @@ import io.github.edoppiap.orarilido.schedule.Direction
 import io.github.edoppiap.orarilido.schedule.ScheduleProvider
 import io.github.edoppiap.orarilido.schedule.Station
 import io.github.edoppiap.orarilido.schedule.SunTimes
+import io.github.edoppiap.orarilido.go.GoDetector
+import io.github.edoppiap.orarilido.go.GoSample
+import io.github.edoppiap.orarilido.go.GoState
+import io.github.edoppiap.orarilido.go.LineTrack
+import io.github.edoppiap.orarilido.go.RideSimulator
+import io.github.edoppiap.orarilido.location.LocationFix
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,7 +33,6 @@ import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
-import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.Locale
@@ -52,6 +62,36 @@ data class MainUiState(
     val nearestStation: Station? = null,
     /** A piedi o in bici: grandezza dei cerchi sulla mappa. */
     val travelMode: TravelMode = TravelMode.WALK,
+    /** Modalità Go: null = spenta (non sei sul treno). */
+    val go: GoUi? = null,
+    /** Simulazione di viaggio in corso (solo build di prova). */
+    val simulating: Boolean = false,
+)
+
+/**
+ * Modalità Go, già pronta da disegnare.
+ * Con [recognizing] = true sembra un treno ma non è ancora confermato:
+ * la tendina mostra solo la riga "Sei in treno? Sto riconoscendo la corsa…".
+ */
+data class GoUi(
+    val recognizing: Boolean,
+    /** "Verso Ostia" / "Verso Roma" (vuoto durante il riconoscimento). */
+    val directionTitle: String = "",
+    /** Le fermate davanti, dalla prossima al capolinea. */
+    val stops: List<GoStopUi> = emptyList(),
+    /** Cosa mostra la striscia a mappa piena: la fermata fissata col tocco, o la prossima. */
+    val stripStop: GoStopUi? = null,
+    /** Le prossime fermate da inquadrare sulla mappa insieme a te. */
+    val focusStations: List<Station> = emptyList(),
+)
+
+/** Una fermata davanti: "Lido Centro · tra 12 min · 08:29". */
+data class GoStopUi(
+    val stationId: String,
+    val name: String,
+    val row: DepartureRow,
+    /** Fissata col tocco ("la mia fermata"): la striscia mostra questa. */
+    val pinned: Boolean,
 )
 
 /** La scheda di una stazione: nome e una riga per ogni direzione servita. */
@@ -104,6 +144,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Ultima posizione nota: SOLO in memoria, mai salvata (privacy). */
     private var userLocation: GeoPoint? = null
 
+    // ---- Modalità Go ----
+    /** Il riconoscitore del treno: pronto quando sono caricati orario e tracciato. */
+    private var detector: GoDetector? = null
+    /** Il tracciato come "righello" (serve anche al simulatore). */
+    private var track: LineTrack? = null
+    /**
+     * L'utente ha chiuso Go con la X: non si riaccende sullo stesso viaggio
+     * (sei ancora sul treno, la riconoscerebbe subito). Torna possibile quando
+     * il riconoscitore esce da solo (sei sceso, ti sei fermato).
+     */
+    private var goDismissed = false
+    /** Fermata fissata toccando la sua scheda (la striscia mostra quella). */
+    private var pinnedStopId: String? = null
+    /**
+     * L'ultima fermata fissata in ciascuna direzione (salvata): a ogni nuovo
+     * viaggio in quella direzione viene fissata da sola, se è davanti a te.
+     */
+    private var goDefaults: Map<Direction, String> = emptyMap()
+    /** Il viaggio in corso ha già avuto la sua fermata predefinita (si applica una volta sola). */
+    private var goDefaultApplied = false
+
+    private val _fastGps = MutableStateFlow(false)
+    /** true = la modalità Go vuole una posizione ogni 5 s (vedi LocationSource). */
+    val fastGps: StateFlow<Boolean> = _fastGps.asStateFlow()
+
+    // ---- Simulatore (solo build di prova) ----
+    private var simulation: Job? = null
+    /** Durante una simulazione l'orologio dell'app va più veloce; null = ora vera. */
+    private var simClock: (() -> LocalDateTime)? = null
+
+    /** L'ora di Roma (o quella finta della simulazione). */
+    private fun now(): LocalDateTime = simClock?.invoke() ?: LocalDateTime.now(ROME)
+
     init {
         viewModelScope.launch {
             // Questi due caricamenti sono già partiti in OrariApp.onCreate:
@@ -117,8 +190,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             favorites = saved.favorites intersect validIds
             mode = saved.mode
             travelMode = saved.travelMode
+            goDefaults = saved.goStops.filterValues { it in validIds }
             // Se il GPS ha già risposto mentre caricavamo, usiamo subito la posizione.
-            userLocation?.let { onLocation(it) } ?: refresh()
+            userLocation?.let { updateNearest(it) }
+            refresh()
+
+            // Il tracciato serve solo alla modalità Go: si legge DOPO, per non
+            // ritardare gli orari all'apertura.
+            val track = withContext(Dispatchers.IO) {
+                LineTrack(LineTrack.parsePoints(app.assets.open("line.json").bufferedReader().use { it.readText() }), p.stations)
+            }
+            this@MainViewModel.track = track
+            detector = GoDetector(track, p.stations, p::minutesFromTerminus)
         }
     }
 
@@ -126,7 +209,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refresh() {
         val p = provider ?: return
         val id = stationId ?: return
-        val now = LocalDateTime.now(ROME)
+        val now = now()
 
         val user = userLocation
         // Ordine per distanza: in metri dall'utente se la posizione è nota,
@@ -148,37 +231,181 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val primaryIds = primary.map { it.id }.toSet()
         val others = byDistance.filter { it.id !in primaryIds }
 
+        // Modalità Go: se sei sul treno, la mappa ti mostra "agganciato" ai binari,
+        // con le fermate davanti evidenziate e la prossima come riferimento.
+        val goState = detector?.state
+        if (goState == GoState.Off) goDismissed = false  // sceso dal treno: la X non vale più
+        val onTrain = (goState as? GoState.OnTrain)?.takeUnless { goDismissed }
+        // Inizio di un viaggio: si fissa da sola la fermata scelta l'ultima volta
+        // in questa direzione (se è ancora davanti a te).
+        if (onTrain == null) {
+            goDefaultApplied = false
+            pinnedStopId = null  // viaggio finito: la fermata fissata vale solo per quello
+        } else if (!goDefaultApplied) {
+            goDefaultApplied = true
+            val default = goDefaults[onTrain.direction]
+            if (default != null && onTrain.ahead.any { it.station.id == default }) pinnedStopId = default
+        }
+        val go = when {
+            goDismissed -> null
+            onTrain != null -> buildGo(onTrain, now)
+            goState is GoState.Detecting -> GoUi(recognizing = true)
+            else -> null
+        }
+        _fastGps.value = go != null && simulation == null
+
         // 14 stazioni × 2 direzioni × 3 treni: calcolo di pochi microsecondi.
         _state.value = MainUiState(
             ready = true,
             mode = mode,
             primaryCards = primary.map { buildCard(p, it, now) },
             otherCards = others.map { buildCard(p, it, now) },
-            highlightedIds = primaryIds,
+            highlightedIds = if (onTrain != null) onTrain.ahead.map { it.station.id }.toSet() else primaryIds,
             favorites = favorites,
             stations = p.stations,
             validFrom = p.validFrom.format(DATE),
-            mapNight = SunTimes.isNight(ZonedDateTime.now(ROME)),
-            userLocation = user,
-            nearestStation = if (user != null) byDistance.first() else null,
+            mapNight = SunTimes.isNight(now.atZone(ROME)),
+            userLocation = onTrain?.pointOnLine ?: user,
+            nearestStation = onTrain?.ahead?.firstOrNull()?.station ?: if (user != null) byDistance.first() else null,
             travelMode = travelMode,
+            go = go,
+            simulating = simulation != null,
         )
         if (dayRequest != null) buildDay()  // aggiorna anche "passati / prossimo" nella giornata
+    }
+
+    /** Le schede delle fermate davanti, con "tra 12 min · 08:29". */
+    private fun buildGo(s: GoState.OnTrain, now: LocalDateTime): GoUi {
+        // Una fermata appena passata senza nuove posizioni (GPS perso un attimo)
+        // resta "ora" per un minuto, poi sparisce.
+        val stops = s.ahead
+            .filter { !it.time.isBefore(now.minusMinutes(1)) }
+            .map { a ->
+                GoStopUi(
+                    stationId = a.station.id,
+                    name = a.station.name,
+                    row = toRow(Departure(a.time), now),
+                    pinned = a.station.id == pinnedStopId,
+                )
+            }
+        if (stops.none { it.pinned }) pinnedStopId = null  // fermata fissata ormai passata
+        return GoUi(
+            recognizing = false,
+            directionTitle = DIRECTIONS.first { it.direction == s.direction }.title,
+            stops = stops,
+            stripStop = stops.firstOrNull { it.pinned } ?: stops.firstOrNull(),
+            // Senza fermata fissata: tu + le prossime due, abbastanza per orientarsi al buio.
+            // Con la fermata fissata: tu + tutto il tratto fino a lei (lo zoom si
+            // stringe da solo man mano che ti avvicini).
+            focusStations = s.ahead.map { it.station }.let { ahead ->
+                val pinnedIndex = ahead.indexOfFirst { it.id == pinnedStopId }
+                if (pinnedIndex >= 0) ahead.take(pinnedIndex + 1) else ahead.take(2)
+            },
+        )
     }
 
     /**
      * Nuova posizione dal GPS. Aggiorna la stazione "vicina" e, se è cambiata,
      * ne salva l'id (solo l'id, mai le coordinate) per il prossimo avvio.
      */
-    fun onLocation(point: GeoPoint) {
-        userLocation = point
-        val p = provider ?: return  // orario non ancora caricato: ci pensa init
+    fun onLocation(fix: LocationFix) {
+        if (simulation != null) return  // durante la simulazione conta solo la posizione finta
+        // Il riconoscitore vuole l'ora in cui la posizione è stata PRESA
+        // (l'ultima nota, all'apertura, può avere qualche minuto).
+        val sample = GoSample(fix.point, now().minusNanos(fix.ageMillis * 1_000_000))
+        // Posizioni troppo imprecise confonderebbero il riconoscimento del treno.
+        onSample(sample, feedDetector = (fix.accuracy ?: 0f) <= MAX_GO_ACCURACY_M)
+    }
+
+    private fun onSample(sample: GoSample, feedDetector: Boolean = true) {
+        userLocation = sample.point
+        if (feedDetector) detector?.update(sample)
+        if (provider == null) return  // orario non ancora caricato: ci pensa init
+        updateNearest(sample.point)
+        refresh()
+    }
+
+    /** Aggiorna la stazione "vicina" e ne salva l'id (mai le coordinate) per il prossimo avvio. */
+    private fun updateNearest(point: GeoPoint) {
+        val p = provider ?: return
         val nearest = Geo.sortByDistance(p.stations, point).first().id
         if (nearest != stationId) {
             stationId = nearest
             viewModelScope.launch { orariApp.stationPrefs.setLastStationId(nearest) }
         }
+    }
+
+    /** Pulsante X: esci dalla modalità Go per questo viaggio. */
+    fun exitGo() {
+        goDismissed = true
+        pinnedStopId = null
         refresh()
+    }
+
+    /** Tocco sulla scheda di una fermata in Go: la fissa nella striscia (o la sblocca). */
+    fun togglePinnedStop(id: String) {
+        pinnedStopId = if (pinnedStopId == id) null else id
+        // La scelta diventa quella predefinita per questa direzione (sbloccare = nessuna).
+        val direction = (detector?.state as? GoState.OnTrain)?.direction
+        if (direction != null) {
+            val chosen = pinnedStopId
+            goDefaults = if (chosen != null) goDefaults + (direction to chosen) else goDefaults - direction
+            viewModelScope.launch { orariApp.stationPrefs.setGoStop(direction, chosen) }
+        }
+        refresh()
+    }
+
+    /**
+     * SOLO BUILD DI PROVA: un viaggio finto verso [direction], con l'orologio
+     * dell'app accelerato ×[SIM_SPEED]. Verso Ostia da Vitinia, verso Roma da
+     * Lido Centro, fino al capolinea; poi qualche minuto fermo, per vedere
+     * l'uscita automatica. Il GPS vero viene ignorato finché dura.
+     */
+    fun simulateRide(direction: Direction) {
+        val p = provider ?: return
+        val d = detector ?: return
+        val track = track ?: return
+        stopSimulation()
+        val ids = p.stations.map { it.id }
+        val (from, to) = when (direction) {
+            Direction.TO_OSTIA -> ids.indexOf("vitinia") to ids.lastIndex
+            Direction.TO_ROMA -> ids.indexOf("lido_centro") to 0
+        }
+        // Orologio finto: parte dall'ora vera e corre SIM_SPEED volte più veloce.
+        val start = LocalDateTime.now(ROME)
+        val t0 = System.nanoTime()
+        simClock = { start.plusNanos((System.nanoTime() - t0) * SIM_SPEED) }
+        val samples = RideSimulator.ride(track, p.minutesFromTerminus(direction), from, to, start)
+        d.reset()
+        goDismissed = false
+        pinnedStopId = null
+        // LAZY: parte solo dopo essere stato salvato in "simulation", così il
+        // "finally" sa riconoscere se è ancora lui la simulazione in corso.
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                for (s in samples) {
+                    val waitMs = Duration.between(now(), s.time).toMillis() / SIM_SPEED
+                    if (waitMs > 0) delay(waitMs)
+                    onSample(s)
+                }
+            } finally {
+                // Fine (o interruzione): si torna all'ora e al GPS veri. Se nel
+                // frattempo è partita un'altra simulazione, quella va lasciata stare.
+                if (simulation === coroutineContext[Job]) {
+                    simClock = null
+                    simulation = null
+                    d.reset()
+                    refresh()
+                }
+            }
+        }
+        simulation = job
+        job.start()
+        refresh()
+    }
+
+    fun stopSimulation() {
+        simulation?.cancel()
     }
 
     /** Selettore "Vicina | Preferite". La scelta viene ricordata. */
@@ -237,7 +464,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun buildDay() {
         val p = provider ?: return
         val req = dayRequest ?: return
-        val now = LocalDateTime.now(ROME).truncatedTo(ChronoUnit.MINUTES)
+        val now = now().truncatedTo(ChronoUnit.MINUTES)
         val departures = p.departuresForDay(req.stationId, req.direction, req.date)
         // Il "prossimo treno" ha senso solo per la giornata in corso.
         val next = if (req.date == serviceToday()) departures.firstOrNull { !it.time.isBefore(now) } else null
@@ -292,7 +519,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * le corse del giorno prima (gli ultimi treni passano dopo mezzanotte).
      */
     private fun serviceToday(): LocalDate {
-        val now = LocalDateTime.now(ROME)
+        val now = now()
         return if (now.hour < 3) now.toLocalDate().minusDays(1) else now.toLocalDate()
     }
 
@@ -338,6 +565,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Gli orari sono quelli di Roma, anche se il telefono avesse un altro fuso.
         /** Treni mostrati per direzione in ogni scheda. */
         const val ROWS_PER_DIRECTION = 3
+        /** Posizioni meno precise di così non vengono date al riconoscitore del treno. */
+        const val MAX_GO_ACCURACY_M = 50f
+        /** Simulazione: l'orologio corre 5 volte più veloce (un viaggio di 30 min dura 6 min). */
+        const val SIM_SPEED = 5L
         val ROME: ZoneId = ZoneId.of("Europe/Rome")
         val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
         val DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("d/M/yyyy")

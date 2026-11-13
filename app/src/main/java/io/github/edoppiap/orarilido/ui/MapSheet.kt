@@ -96,6 +96,20 @@ class MapSheetState internal constructor(private val scope: CoroutineScope) {
     private val minTop get() = tops.getValue(SheetStop.EXPANDED)
     private val maxTop get() = tops.getValue(SheetStop.COLLAPSED)
 
+    /**
+     * Quanto la tendina è scesa da "metà" verso "mappa piena": 0 = a metà (o più
+     * su), 1 = mappa piena. Serve a chi vuole trasformarsi mentre la tendina
+     * scende (le schede della modalità Go). Leggerlo dentro un lambda di disegno
+     * o di layout evita di ridisegnare tutto a ogni fotogramma.
+     */
+    val collapseProgress: Float
+        get() {
+            val half = tops[SheetStop.HALF] ?: return 0f
+            val collapsed = tops[SheetStop.COLLAPSED] ?: return 0f
+            if (collapsed <= half || offset.isNaN()) return 0f
+            return ((offset - half) / (collapsed - half)).coerceIn(0f, 1f)
+        }
+
     /** true se la tendina è ferma esattamente su una fermata. */
     internal val atStop: Boolean get() = tops.values.any { abs(it - offset) < 0.5f }
 
@@ -162,7 +176,14 @@ fun MapSheetLayout(
     peekHeight: Dp,
     halfFraction: Float,
     background: @Composable () -> Unit,
-    strip: @Composable () -> Unit,
+    /** null = niente striscia: è il contenuto stesso a trasformarsi (vedi [MapSheetState.collapseProgress]). */
+    strip: (@Composable () -> Unit)?,
+    /**
+     * true = la striscia compare di colpo solo a mappa piena (invece che in
+     * dissolvenza): serve quando il contenuto stesso si trasforma fino a
+     * diventare identico alla striscia, che poi gli si sostituisce senza che si veda.
+     */
+    stripAtEndOnly: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -222,7 +243,8 @@ fun MapSheetLayout(
         // La striscia compare nell'ultima metà della discesa verso "mappa piena".
         val stripAlpha = {
             val progress = (state.offset - halfTop) / (collapsedTop - halfTop)
-            ((progress - 0.5f) / 0.5f).coerceIn(0f, 1f)
+            if (stripAtEndOnly) (if (progress >= 0.999f) 1f else 0f)
+            else ((progress - 0.5f) / 0.5f).coerceIn(0f, 1f)
         }
         val stripVisible by remember { derivedStateOf { stripAlpha() > 0.01f } }
 
@@ -260,7 +282,7 @@ fun MapSheetLayout(
             DragHandle()
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 content()
-                if (stripVisible) {
+                if (strip != null && stripVisible) {
                     // Sopra la lista: la copre TUTTA (anche dietro la barra di
                     // navigazione, dove altrimenti si intravedrebbe) e prende i tocchi al suo posto.
                     Box(

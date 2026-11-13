@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import io.github.edoppiap.orarilido.schedule.Direction
 import kotlinx.coroutines.flow.first
 
 // Un unico file di preferenze per tutta l'app.
@@ -22,6 +23,8 @@ data class SavedPrefs(
     val favorites: Set<String>,
     val mode: PrimaryMode,
     val travelMode: TravelMode,
+    /** Modalità Go: la fermata fissata l'ultima volta in ciascuna direzione. */
+    val goStops: Map<Direction, String>,
 )
 
 /**
@@ -39,6 +42,7 @@ class StationPrefs(context: Context) {
             favorites = p[FAVORITES].orEmpty(),
             mode = p[MODE]?.let { runCatching { PrimaryMode.valueOf(it) }.getOrNull() } ?: PrimaryMode.NEAREST,
             travelMode = p[TRAVEL]?.let { runCatching { TravelMode.valueOf(it) }.getOrNull() } ?: TravelMode.WALK,
+            goStops = Direction.entries.mapNotNull { d -> p[goStopKey(d)]?.let { d to it } }.toMap(),
         )
     }
 
@@ -58,7 +62,13 @@ class StationPrefs(context: Context) {
         store.edit { it[TRAVEL] = mode.name }
     }
 
+    /** Modalità Go: ricorda (o dimentica, con null) la fermata fissata in quella direzione. */
+    suspend fun setGoStop(direction: Direction, id: String?) {
+        store.edit { if (id != null) it[goStopKey(direction)] = id else it.remove(goStopKey(direction)) }
+    }
+
     private companion object {
+        fun goStopKey(d: Direction) = stringPreferencesKey("go_stop_" + d.jsonKey)
         val LAST_STATION = stringPreferencesKey("last_station")
         val FAVORITES = stringSetPreferencesKey("favorites")
         val MODE = stringPreferencesKey("primary_mode")

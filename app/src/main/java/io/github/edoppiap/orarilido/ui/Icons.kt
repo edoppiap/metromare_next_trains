@@ -45,3 +45,15 @@ fun MenuIcon(color: Color) {
         }
     }
 }
+
+/** Icona "✕" (chiudi): due tratti arrotondati incrociati. Esce dalla modalità Go. */
+@Composable
+fun CloseIcon(color: Color) {
+    Canvas(Modifier.size(18.dp)) {
+        val stroke = 2.5.dp.toPx()
+        val a = size.width * 0.15f
+        val b = size.width * 0.85f
+        drawLine(color, androidx.compose.ui.geometry.Offset(a, a), androidx.compose.ui.geometry.Offset(b, b), stroke, StrokeCap.Round)
+        drawLine(color, androidx.compose.ui.geometry.Offset(b, a), androidx.compose.ui.geometry.Offset(a, b), stroke, StrokeCap.Round)
+    }
+}

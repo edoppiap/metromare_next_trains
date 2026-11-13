@@ -99,6 +99,13 @@ fun LineMap(
     travelMode: TravelMode,
     /** Cerchi visibili? Si accendono/spengono toccando il pallino dell'utente. */
     showCircles: Boolean,
+    /**
+     * Modalità Go: le prossime fermate davanti (vuota = Go spenta). L'inquadratura
+     * "tu + stazione" diventa "tu + queste fermate" e segue il treno.
+     */
+    goStations: List<Station> = emptyList(),
+    /** In Go, la fermata fissata col tocco (null = nessuna): fissandola, la mappa inquadra il tratto fino a lei. */
+    goPinnedId: String? = null,
     onUserClick: () -> Unit,
     bottomPadding: androidx.compose.ui.unit.Dp,
     /**
@@ -230,6 +237,11 @@ fun LineMap(
         null -> if (userLocation != null) RecenterTarget.USER else cycle.first()
         else -> cycle[(cycle.indexOf(current) + 1) % cycle.size]  // indexOf = −1 → il primo
     }
+    // Spazio coperto dalla tendina ATTUALMENTE applicato alla mappa (vedi MapEffect più giù).
+    var appliedPadding by remember { mutableStateOf(bottomPadding) }
+    // Misura della mappa in px, per sapere dove cade il centro dello spazio visibile.
+    var mapSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+
     /**
      * Porta la mappa sull'inquadratura [target], nello spazio visibile sopra la
      * tendina. La usano il pulsante "centra", il cambio di altezza della tendina
@@ -240,7 +252,9 @@ fun LineMap(
         val station = focusStation?.let { LatLng(it.lat, it.lon) }
         val points = when (target) {
             RecenterTarget.USER -> listOfNotNull(user)
-            RecenterTarget.USER_AND_STATION -> listOfNotNull(station, user)
+            RecenterTarget.USER_AND_STATION ->
+                if (goStations.isNotEmpty()) listOfNotNull(user) + goStations.map { LatLng(it.lat, it.lon) }
+                else listOfNotNull(station, user)
             RecenterTarget.STATION -> listOfNotNull(station)
             RecenterTarget.LINE -> stations.map { LatLng(it.lat, it.lon) }
         }
@@ -248,12 +262,21 @@ fun LineMap(
             0 -> return  // niente da inquadrare (es. GPS perso nel frattempo)
             1 -> cameraState.animate(CameraUpdateFactory.newLatLngZoom(points.first(), USER_ZOOM), durationMs)
             else -> {
-                val bounds = LatLngBounds.builder().apply { points.forEach { include(it) } }.build()
-                val margin = with(density) { 72.dp.roundToPx() }
-                cameraState.animate(CameraUpdateFactory.newLatLngBounds(bounds, margin), durationMs)
-                if (target != RecenterTarget.LINE && cameraState.position.zoom > MAX_ZOOM) {
-                    cameraState.animate(CameraUpdateFactory.zoomTo(MAX_ZOOM), 300)
+                // Centro e zoom calcolati PRIMA di muoversi (con lo zoom già limitato
+                // a MAX_ZOOM), poi un'unica animazione. Prima si faceva "inquadra i
+                // punti" e poi "se è troppo vicino, allontana": con te quasi sopra la
+                // stazione la mappa zoomava a fondo e poi tornava indietro, a ogni
+                // nuova posizione (il "dentro-fuori" visto all'inizio della simulazione).
+                if (mapSize.height == 0) return  // mappa non ancora misurata
+                val camera = with(density) {
+                    fitCamera(
+                        points = points,
+                        widthDp = mapSize.width.toDp().value,
+                        heightDp = mapSize.height.toDp().value - appliedPadding.value,
+                        marginDp = 72f,
+                    )
                 }
+                cameraState.animate(CameraUpdateFactory.newCameraPosition(camera), durationMs)
             }
         }
     }
@@ -264,18 +287,28 @@ fun LineMap(
         scope.launch { applyFraming(target, 600) }
     }
 
-    // Modalità "tu" o "tu + stazione" attiva: la mappa ti segue quando ti sposti.
-    LaunchedEffect(userLocation) {
+    // Modalità Go: entrando, inquadratura "tu + prossime fermate". Anche fissando
+    // (o sbloccando) una fermata si torna lì, pure se avevi spostato la mappa:
+    // vuoi vedere il tratto fino a lì. Uscendo da Go la mappa resta dov'è.
+    val goActive = goStations.isNotEmpty()
+    // Ultima situazione Go vista (attiva? quale fermata fissata?), per accorgersi dei cambi.
+    var lastGoKey by remember { mutableStateOf<Pair<Boolean, String?>>(false to null) }
+
+    // Modalità "tu" o "tu + stazione" attiva: la mappa ti segue quando ti sposti
+    // (e in Go anche quando cambiano le fermate davanti: lo zoom si stringe man mano).
+    // UN SOLO effetto per tutto: due effetti separati facevano partire due
+    // animazioni insieme, che si contendevano la camera.
+    LaunchedEffect(userLocation, goStations, goPinnedId, mapLoaded) {
+        if (!mapLoaded) return@LaunchedEffect
+        val goKey = goActive to goPinnedId
+        if (goActive && goKey != lastGoKey) framing = RecenterTarget.USER_AND_STATION
+        lastGoKey = goKey
         val current = framing
         if (mapLoaded && (current == RecenterTarget.USER || current == RecenterTarget.USER_AND_STATION)) {
             applyFraming(current, 500)
         }
     }
 
-    // Spazio coperto dalla tendina ATTUALMENTE applicato alla mappa (vedi MapEffect più giù).
-    var appliedPadding by remember { mutableStateOf(bottomPadding) }
-    // Misura della mappa in px, per sapere dove cade il centro dello spazio visibile.
-    var mapSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
 
     Box(modifier) {
         GoogleMap(

@@ -42,7 +42,12 @@ enum class InfoPage(val title: String) {
  * [onNavigate] con null = chiudi il menu.
  */
 @Composable
-fun InfoScreen(page: InfoPage, onNavigate: (InfoPage?) -> Unit) {
+fun InfoScreen(
+    page: InfoPage,
+    onNavigate: (InfoPage?) -> Unit,
+    /** Voci solo per la build di prova (es. simulatore della modalità Go). */
+    debugActions: List<Pair<String, () -> Unit>> = emptyList(),
+) {
     val back = { onNavigate(if (page == InfoPage.MENU) null else InfoPage.MENU) }
     BackHandler(onBack = back)
     val colors = MaterialTheme.colorScheme
@@ -67,6 +72,7 @@ fun InfoScreen(page: InfoPage, onNavigate: (InfoPage?) -> Unit) {
         ) {
             if (page == InfoPage.MENU) {
                 MenuList(onNavigate)
+                if (debugActions.isNotEmpty()) DebugList(debugActions)
             } else {
                 Text(
                     INFO_TEXTS.getValue(page),
@@ -80,6 +86,38 @@ fun InfoScreen(page: InfoPage, onNavigate: (InfoPage?) -> Unit) {
                     color = colors.onSurface,
                 )
             }
+        }
+    }
+}
+
+/** Riquadro "Solo build di prova" con le voci del simulatore. */
+@Composable
+private fun DebugList(actions: List<Pair<String, () -> Unit>>) {
+    val colors = MaterialTheme.colorScheme
+    Text(
+        "Solo build di prova",
+        modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 6.dp),
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Bold,
+        color = colors.onSurfaceVariant,
+    )
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(colors.surface),
+    ) {
+        actions.forEachIndexed { i, (label, action) ->
+            if (i > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.outlineVariant)
+            Text(
+                label,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = action)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                fontSize = 16.sp,
+                color = colors.primary,
+            )
         }
     }
 }

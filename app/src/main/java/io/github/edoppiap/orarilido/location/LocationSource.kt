@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Looper
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
@@ -14,6 +15,12 @@ import com.google.android.gms.location.Priority
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+
+/**
+ * Una posizione dal GPS. [accuracy] = raggio di incertezza in metri (null se
+ * ignoto), [ageMillis] = da quanto è stata presa (l'ultima nota può essere vecchia).
+ */
+data class LocationFix(val point: GeoPoint, val accuracy: Float?, val ageMillis: Long)
 
 /**
  * Posizione dell'utente tramite FusedLocationProvider (Google Play Services).
@@ -35,19 +42,29 @@ class LocationSource(context: Context) {
             ContextCompat.checkSelfPermission(appContext, it) == PackageManager.PERMISSION_GRANTED
         }
 
-    /** Flow di posizioni: prima l'ultima nota, poi una ogni ~10 s o ogni 15 m percorsi. */
+    /**
+     * Flow di posizioni: prima l'ultima nota, poi una ogni ~10 s o ogni 15 m percorsi.
+     * Con [fast] (modalità Go): una ogni 5 s, anche da fermo, perché serve
+     * seguire il treno da vicino e capire quando si ferma.
+     */
     @SuppressLint("MissingPermission")  // chi chiama controlla prima hasPermission()
-    fun updates(): Flow<GeoPoint> = callbackFlow {
-        client.lastLocation.addOnSuccessListener { last ->
-            if (last != null) trySend(GeoPoint(last.latitude, last.longitude))
+    fun updates(fast: Boolean = false): Flow<LocationFix> = callbackFlow {
+        fun send(l: android.location.Location) {
+            val ageMs = (SystemClock.elapsedRealtimeNanos() - l.elapsedRealtimeNanos) / 1_000_000
+            trySend(LocationFix(GeoPoint(l.latitude, l.longitude), if (l.hasAccuracy()) l.accuracy else null, ageMs))
         }
+        client.lastLocation.addOnSuccessListener { last -> if (last != null) send(last) }
 
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10_000)
-            .setMinUpdateDistanceMeters(15f)
-            .build()
+        val request = if (fast) {
+            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5_000).build()
+        } else {
+            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10_000)
+                .setMinUpdateDistanceMeters(15f)
+                .build()
+        }
         val callback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
-                result.lastLocation?.let { trySend(GeoPoint(it.latitude, it.longitude)) }
+                result.lastLocation?.let { send(it) }
             }
         }
         client.requestLocationUpdates(request, callback, Looper.getMainLooper())
