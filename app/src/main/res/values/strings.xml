@@ -1,3 +1,6 @@
 <resources>
+    <!-- Nome completo dell'app: Impostazioni > App, menu Info, README -->
     <string name="app_name">Orari Metromare</string>
+    <!-- Nome corto sotto l'icona nella schermata home ("Orari Metromare" veniva tagliato) -->
+    <string name="launcher_label">Orari Trenino</string>
 </resources>
