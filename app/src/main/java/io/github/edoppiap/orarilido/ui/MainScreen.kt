@@ -60,6 +60,15 @@ import io.github.edoppiap.orarilido.data.TravelMode
 import io.github.edoppiap.orarilido.schedule.Direction
 import io.github.edoppiap.orarilido.ui.theme.OrariTheme
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.Velocity
 
 /**
  * Schermata principale, stile Citymapper: mappa a tutto schermo e sopra
@@ -206,6 +215,7 @@ private fun SheetContent(
 
     LazyColumn(
         Modifier
+            .sheetScrollGuard(listState)
             .fillMaxWidth()
             .fillMaxHeight(),  // a tendina alzata occupa tutto lo schermo
         state = listState,
@@ -230,6 +240,39 @@ private fun SheetContent(
             }
         }
     }
+}
+
+/**
+ * Evita che scorrendo le stazioni la tendina si abbassi "per sbaglio".
+ *
+ * Normalmente, quando la lista arriva in cima, lo scorrimento avanzato (il resto
+ * del trascinamento o lo slancio del dito) passa alla tendina, che scende.
+ * Qui lo "mangiamo" noi, a meno che il dito non sia appoggiato quando la lista
+ * era GIÀ in cima: in quel caso trascinare giù vuol dire davvero abbassarla.
+ */
+@Composable
+private fun Modifier.sheetScrollGuard(listState: LazyListState): Modifier {
+    // Non serve ridisegnare quando cambia: basta una "scatola" con un booleano.
+    val startedAtTop = remember { booleanArrayOf(true) }
+    val guard = remember {
+        object : NestedScrollConnection {
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
+                // available.y > 0 = avanzo verso il basso, che abbasserebbe la tendina.
+                if (!startedAtTop[0] && available.y > 0f) Offset(0f, available.y) else Offset.Zero
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity =
+                if (!startedAtTop[0]) available else Velocity.Zero
+        }
+    }
+    return this
+        .pointerInput(listState) {
+            awaitEachGesture {
+                // Pass "Initial" = lo vediamo prima della lista, senza consumarlo.
+                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                startedAtTop[0] = !listState.canScrollBackward
+            }
+        }
+        .nestedScroll(guard)
 }
 
 /** "In primo piano          [📍 Vicina | ⭐ Preferite]" */

@@ -20,7 +20,6 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -66,6 +65,13 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import com.google.android.gms.maps.model.CameraPosition
+import kotlin.math.PI
+import kotlin.math.atan
+import kotlin.math.exp
+import kotlin.math.ln
+import kotlin.math.log2
+import kotlin.math.tan
 
 /**
  * Mappa Google con la linea, le stazioni e (fase 4) la posizione dell'utente.
@@ -103,7 +109,18 @@ fun LineMap(
         value = withContext(Dispatchers.IO) { loadLine(context) }
     }
 
-    val cameraState = rememberCameraPositionState()
+    // La mappa nasce GIÀ inquadrata sulla linea intera (niente partenza dal
+    // mappamondo): centro e zoom si calcolano a mano dalla misura dello schermo,
+    // perché l'inquadratura "automatica" di Google si può usare solo a mappa caricata.
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val cameraState = rememberCameraPositionState {
+        position = fitCamera(
+            points = stations.map { LatLng(it.lat, it.lon) },
+            widthDp = configuration.screenWidthDp.toFloat(),
+            heightDp = configuration.screenHeightDp - bottomPadding.value,
+            marginDp = 48f,
+        )
+    }
     var mapLoaded by remember { mutableStateOf(false) }
     // I nomi delle stazioni compaiono solo con uno zoom abbastanza vicino,
     // altrimenti con la linea intera si sovrapporrebbero.
@@ -143,15 +160,9 @@ fun LineMap(
         label = "metersPerMinute",
     )
 
-    // Primo caricamento: inquadra tutta la linea (tutte le stazioni).
-    LaunchedEffect(mapLoaded) {
-        if (!mapLoaded || stations.isEmpty()) return@LaunchedEffect
-        val bounds = LatLngBounds.builder().apply {
-            stations.forEach { include(LatLng(it.lat, it.lon)) }
-        }.build()
-        val marginPx = with(density) { 48.dp.roundToPx() }
-        cameraState.move(CameraUpdateFactory.newLatLngBounds(bounds, marginPx))
-    }
+    // Inquadratura ATTUALE della mappa (null = l'utente l'ha spostata col dito).
+    // All'apertura è la linea intera, perché la mappa nasce così.
+    var framing by remember { mutableStateOf<RecenterTarget?>(RecenterTarget.LINE) }
 
     // Alla prima posizione: zoom che inquadra te e la stazione più vicina.
     // Una volta sola, così poi la mappa resta dove la sposti tu.
@@ -161,8 +172,11 @@ fun LineMap(
         val station = nearestStation ?: return@LaunchedEffect
         if (!mapLoaded || zoomedToUser) return@LaunchedEffect
         zoomedToUser = true
+        // Se nel frattempo hai già spostato la mappa, non te la portiamo via.
+        if (framing != RecenterTarget.LINE) return@LaunchedEffect
         // Se sei lontano dalla linea (es. in un'altra città) non ha senso zoomare.
         if (Geo.distanceMeters(user, station) > MAX_ZOOM_DISTANCE_M) return@LaunchedEffect
+        framing = RecenterTarget.USER_AND_STATION
         val bounds = LatLngBounds.builder()
             .include(LatLng(user.lat, user.lon))
             .include(LatLng(station.lat, station.lon))
@@ -177,36 +191,40 @@ fun LineMap(
     val heading by rememberHeading(userLocation)
 
     // ---- Pulsante "centra": ogni tocco passa all'inquadratura successiva ----
-    var recenterStep by remember { mutableIntStateOf(0) }
-    var followingUser by remember { mutableStateOf(false) }
-    // Se l'utente sposta la mappa col dito, il giro riparte dal primo passo.
+    // Se l'utente sposta la mappa col dito, non c'è più un'inquadratura "attuale".
     LaunchedEffect(cameraState.isMoving) {
         if (cameraState.isMoving && cameraState.cameraMoveStartedReason == CameraMoveStartedReason.GESTURE) {
-            recenterStep = 0
-            followingUser = false
+            framing = null
         }
     }
     val scope = rememberCoroutineScope()
-    val primary = stations.filter { it.id in highlightedIds }
-    // Le inquadrature disponibili dipendono da cosa sappiamo.
-    val targets = buildList {
+    // La stazione di riferimento è UNA sola: la più vicina (anche con più
+    // preferite in primo piano, che altrimenti allargherebbero troppo lo zoom).
+    // Senza GPS: la prima in primo piano (l'ultima usata).
+    val focusStation = nearestStation ?: stations.firstOrNull { it.id in highlightedIds }
+    // Il giro delle inquadrature: stazione → tu → linea → stazione → ...
+    // (senza GPS: stazione → linea → ...)
+    val cycle = buildList {
+        if (focusStation != null) add(if (userLocation != null) RecenterTarget.USER_AND_STATION else RecenterTarget.STATION)
         if (userLocation != null) add(RecenterTarget.USER)
-        if (primary.isNotEmpty()) add(if (userLocation != null) RecenterTarget.USER_AND_PRIMARY else RecenterTarget.PRIMARY)
         add(RecenterTarget.LINE)
     }
-    // Cosa farà il PROSSIMO tocco: l'icona del pulsante lo mostra.
-    val nextTarget = targets[recenterStep % targets.size]
+    // Cosa farà il PROSSIMO tocco (l'icona del pulsante lo mostra): il passo
+    // dopo quello attuale; se hai spostato la mappa, si riparte da "tu".
+    val nextTarget = when (val current = framing) {
+        null -> if (userLocation != null) RecenterTarget.USER else cycle.first()
+        else -> cycle[(cycle.indexOf(current) + 1) % cycle.size]  // indexOf = −1 → il primo
+    }
     val onRecenter: () -> Unit = {
         val target = nextTarget
-        recenterStep++
-        followingUser = target == RecenterTarget.USER
+        framing = target
         val margin = with(density) { 72.dp.roundToPx() }
         scope.launch {
             val points = when (target) {
                 RecenterTarget.USER -> emptyList()
-                RecenterTarget.USER_AND_PRIMARY ->
-                    primary.map { LatLng(it.lat, it.lon) } + LatLng(userLocation!!.lat, userLocation.lon)
-                RecenterTarget.PRIMARY -> primary.map { LatLng(it.lat, it.lon) }
+                RecenterTarget.USER_AND_STATION ->
+                    listOf(LatLng(focusStation!!.lat, focusStation.lon), LatLng(userLocation!!.lat, userLocation.lon))
+                RecenterTarget.STATION -> listOf(LatLng(focusStation!!.lat, focusStation.lon))
                 RecenterTarget.LINE -> stations.map { LatLng(it.lat, it.lon) }
             }
             when {
@@ -308,6 +326,20 @@ fun LineMap(
                         WalkLabel("$emoji $minutes min", night)
                     }
                 }
+                // Cono: dove punta il telefono. Marker "flat" = sta disteso sulla
+                // mappa, quindi "rotation" è in gradi dal nord e gira con la mappa.
+                heading?.let { degrees ->
+                    MarkerComposable(
+                        keys = arrayOf<Any>("cone", dark),
+                        state = rememberUpdatedMarkerState(center),
+                        anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
+                        flat = true,
+                        rotation = degrees,
+                        zIndex = 2.5f,  // sotto il pallino, sopra le stazioni
+                    ) {
+                        HeadingCone(night)
+                    }
+                }
                 MarkerComposable(
                     keys = arrayOf<Any>("user", dark),
                     state = rememberUpdatedMarkerState(center),
@@ -349,7 +381,7 @@ fun LineMap(
         // In basso a destra, appena sopra la tendina.
         RecenterButton(
             next = nextTarget,
-            active = followingUser,
+            active = framing == RecenterTarget.USER,
             night = night,
             onClick = onRecenter,
             modifier = Modifier
@@ -432,8 +464,35 @@ private fun StationName(name: String, selected: Boolean, night: Boolean) {
     )
 }
 
-/** Le inquadrature del pulsante "centra", nell'ordine in cui si susseguono. */
-private enum class RecenterTarget { USER, USER_AND_PRIMARY, PRIMARY, LINE }
+/**
+ * Le inquadrature del pulsante "centra": tu, tu + stazione più vicina,
+ * solo la stazione (senza GPS), tutta la linea.
+ */
+private enum class RecenterTarget { USER, USER_AND_STATION, STATION, LINE }
+
+/**
+ * Centro e zoom che fanno stare [points] in un riquadro di [widthDp] × [heightDp].
+ * Stesso conto che fa Google: a zoom z il mondo intero è largo 256 · 2^z dp,
+ * e in verticale si usa la proiezione di Mercatore (le latitudini si "allungano").
+ */
+private fun fitCamera(points: List<LatLng>, widthDp: Float, heightDp: Float, marginDp: Float): CameraPosition {
+    if (points.isEmpty()) return CameraPosition.fromLatLngZoom(LatLng(41.78, 12.40), 10f)
+    fun mercatorY(lat: Double) = ln(tan(PI / 4 + Math.toRadians(lat) / 2))
+    val minLat = points.minOf { it.latitude }
+    val maxLat = points.maxOf { it.latitude }
+    val minLon = points.minOf { it.longitude }
+    val maxLon = points.maxOf { it.longitude }
+    // Frazione del mondo occupata dai punti, in orizzontale e in verticale.
+    val fracX = (maxLon - minLon) / 360.0
+    val fracY = (mercatorY(maxLat) - mercatorY(minLat)) / (2 * PI)
+    val w = (widthDp - 2 * marginDp).coerceAtLeast(1f)
+    val h = (heightDp - 2 * marginDp).coerceAtLeast(1f)
+    val zoom = minOf(log2(w / (256 * fracX)), log2(h / (256 * fracY))).toFloat()
+    // Centro: a metà in longitudine, e a metà "in Mercatore" in latitudine.
+    val midY = (mercatorY(minLat) + mercatorY(maxLat)) / 2
+    val centerLat = Math.toDegrees(2 * atan(exp(midY)) - PI / 2)
+    return CameraPosition.fromLatLngZoom(LatLng(centerLat, (minLon + maxLon) / 2), zoom.coerceIn(2f, MAX_ZOOM))
+}
 
 /** Zoom "di quartiere" per centrare su di te o su una stazione. */
 private const val USER_ZOOM = 16f
@@ -560,11 +619,11 @@ private fun FitIcon(target: RecenterTarget, color: androidx.compose.ui.graphics.
         line(s, s, s - k, s); line(s, s, s, s - k)
         val ring = androidx.compose.ui.graphics.drawscope.Stroke(stroke * 0.9f)
         when (target) {
-            RecenterTarget.USER_AND_PRIMARY -> {
+            RecenterTarget.USER_AND_STATION -> {
                 drawCircle(color, s * 0.10f, androidx.compose.ui.geometry.Offset(s * 0.34f, s * 0.64f))  // tu
                 drawCircle(color, s * 0.11f, androidx.compose.ui.geometry.Offset(s * 0.66f, s * 0.36f), style = ring)  // stazione
             }
-            RecenterTarget.PRIMARY ->
+            RecenterTarget.STATION ->
                 drawCircle(color, s * 0.14f, center, style = ring)
             RecenterTarget.LINE -> {
                 line(s * 0.28f, s * 0.72f, s * 0.72f, s * 0.28f, stroke * 0.9f)
