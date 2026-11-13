@@ -126,7 +126,10 @@ fun MainScreen(
     // di giorno con il telefono in tema scuro, icone bianche sulla mappa chiara non si leggono.
     // Dietro c'è la mappa, salvo quando la tendina (o una pagina sopra) arriva in cima.
     val statusBarPx = WindowInsets.statusBars.getTop(density)
-    val sheetUnderStatusBar by remember { derivedStateOf { sheet.offset < statusBarPx } }
+    // La chiave statusBarPx serve: al primo fotogramma l'altezza della barra vale ancora 0,
+    // e senza chiave la soglia resterebbe 0 per sempre (era il bug "a tendina aperta non cambia").
+    // Si cambia colore quando il bordo della tendina entra sotto la barra.
+    val sheetUnderStatusBar by remember(statusBarPx) { derivedStateOf { sheet.offset < statusBarPx } }
     val appIsLight = MaterialTheme.colorScheme.background.luminance() > 0.5f
     val lightIcons = if (overlayOpen || sheetUnderStatusBar) !appIsLight else state.mapNight
     val view = LocalView.current
