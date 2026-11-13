@@ -125,7 +125,11 @@ fun MainScreen(
     // Modalità Go attiva (sul treno, non solo "sto riconoscendo"): i cerchi
     // a piedi/in bici non servono, al loro posto in alto c'è la X.
     val goActive = state.go?.recognizing == false
-    val circlesOn = !goActive && (circlesByTap ?: (fullMap && !circlesHeldBack))
+    // Inquadratura "tutta la linea": i cerchi lì non servono (deciso 13/11). Tornano
+    // in "tu" e "tu + stazione". Cambiando inquadratura si torna all'automatico.
+    var lineFraming by remember { mutableStateOf(true) }  // la mappa nasce sulla linea intera
+    LaunchedEffect(lineFraming) { circlesByTap = null }
+    val circlesOn = !goActive && (circlesByTap ?: (fullMap && !circlesHeldBack && !lineFraming))
     /** Il percorso suggerito è disegnato sulla mappa (solo in "tu + stazione", lo decide LineMap). */
     var routeOnMap by remember { mutableStateOf(false) }
     // Direzione scelta a mano nella striscia a mappa piena, e per quale stazione.
@@ -204,6 +208,7 @@ fun MainScreen(
                     // Il selettore cambia cerchi E percorso: serve se c'è almeno uno dei due.
                     travelToggleVisible = state.userLocation != null && (circlesOn || routeOnMap),
                     onRouteVisible = { routeOnMap = it },
+                    onLineFraming = { lineFraming = it },
                     // Punti di interesse: solo a mappa piena e mai in Go (non "inquinano" la schermata).
                     showPlaces = fullMap && state.go == null,
                     onTravelMode = onTravelMode,
@@ -259,6 +264,7 @@ private fun MapLayer(
     onMenu: () -> Unit,
     travelToggleVisible: Boolean,
     onRouteVisible: (Boolean) -> Unit,
+    onLineFraming: (Boolean) -> Unit,
     showPlaces: Boolean,
     onTravelMode: (TravelMode) -> Unit,
     goActive: Boolean,
@@ -293,6 +299,7 @@ private fun MapLayer(
                 goPinnedId = state.go?.stripStop?.takeIf { it.pinned }?.stationId,
                 route = state.route,
                 onRouteVisible = onRouteVisible,
+                onLineFraming = onLineFraming,
                 showPlaces = showPlaces,
                 onUserClick = onUserClick,
                 onMapGesture = onMapGesture,

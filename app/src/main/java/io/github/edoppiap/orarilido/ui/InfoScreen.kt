@@ -186,7 +186,7 @@ private val INFO_TEXTS = mapOf(
         In breve: l'app non raccoglie dati su di te.
 
         Posizione
-        Se dai il permesso, la posizione serve solo a trovare la stazione più vicina, calcolare le distanze e disegnare i cerchi sulla mappa. Viene letta solo mentre l'app è aperta, resta sul telefono e non viene mai salvata né inviata dal codice dell'app. Puoi negare il permesso: l'app funziona lo stesso.
+        Se dai il permesso, la posizione serve solo a trovare la stazione più vicina, calcolare le distanze, disegnare i cerchi sulla mappa e calcolare il percorso suggerito fino alla stazione. Il percorso è calcolato interamente sul telefono, con una mappa delle strade inclusa nell'app: la tua posizione non viene inviata a nessun servizio di navigazione. Viene letta solo mentre l'app è aperta, resta sul telefono e non viene mai salvata né inviata dal codice dell'app. Puoi negare il permesso: l'app funziona lo stesso.
 
         Cosa resta sul telefono
         Solo le tue scelte: ultima stazione usata, stazioni preferite, "Vicina/Preferite", "a piedi/in bici". Nessuna coordinata. Si cancellano disinstallando l'app.
@@ -209,6 +209,10 @@ private val INFO_TEXTS = mapOf(
         Orari programmati
         Gli orari sono quelli PROGRAMMATI dell'orario ufficiale, non in tempo reale: ritardi, soppressioni, scioperi, lavori e bus sostitutivi non sono mostrati. Prima di partire, soprattutto in caso di dubbi, controlla i canali ufficiali (ad esempio l'app Astral Infomobilità).
         Gli orari contrassegnati con "?" non sono confermati dalla fonte ufficiale.
+
+        Percorsi suggeriti
+        Il percorso a piedi o in bici fino alla stazione è calcolato in automatico sul telefono, a partire dai dati di OpenStreetMap, che possono essere incompleti o non aggiornati. Può quindi sbagliare: indicare strade pericolose, senza marciapiede o senza attraversamenti, passaggi chiusi o aree private, e non tiene conto di traffico, lavori, illuminazione o pendenze. I tempi indicati sono stime.
+        È solo un suggerimento: la scelta di dove passare resta tua. Rispetta sempre il codice della strada, la segnaletica e le proprietà private, e non attraversare zone vietate o pericolose anche se il percorso ci passa.
 
         Nessuna garanzia
         L'app è gratuita e fornita "così com'è", senza garanzie di alcun tipo. L'autore non è responsabile di treni persi, ritardi o altri inconvenienti derivanti dal suo uso.

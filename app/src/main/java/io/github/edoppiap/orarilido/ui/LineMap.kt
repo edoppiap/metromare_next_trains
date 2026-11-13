@@ -122,6 +122,11 @@ fun LineMap(
     goPinnedId: String? = null,
     /** Percorso suggerito verso la stazione più vicina (null = nessuno). */
     route: RouteUi? = null,
+    /**
+     * Inquadratura "tutta la linea" sì/no (i cerchi lì spariscono). Si avvisa solo
+     * quando scegli un'inquadratura: spostando la mappa a mano resta l'ultimo valore.
+     */
+    onLineFraming: (Boolean) -> Unit = {},
     /** Il percorso è davvero disegnato? (serve a MainScreen per il selettore 🚶|🚲) */
     onRouteVisible: (Boolean) -> Unit = {},
     /** Punti di interesse (fontanelle, bar, ...) ammessi? Solo a mappa piena e mai in Go. */
@@ -264,6 +269,7 @@ fun LineMap(
     //  - ricompare tornando a "tu + stazione", o se cambiano stazione o mezzo.
     //  Mai in Go.
     var routeOn by remember { mutableStateOf(false) }
+    LaunchedEffect(framing) { framing?.let { onLineFraming(it == RecenterTarget.LINE) } }
     LaunchedEffect(framing, routeReady) {
         when (framing) {
             RecenterTarget.USER_AND_STATION -> if (routeReady) routeOn = true
