@@ -261,10 +261,11 @@ fun MapSheetLayout(
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 content()
                 if (stripVisible) {
-                    // Sopra la lista: copre l'inizio della lista e prende i tocchi al suo posto.
+                    // Sopra la lista: la copre TUTTA (anche dietro la barra di
+                    // navigazione, dove altrimenti si intravedrebbe) e prende i tocchi al suo posto.
                     Box(
                         Modifier
-                            .fillMaxWidth()
+                            .matchParentSize()
                             .graphicsLayer { alpha = stripAlpha() }
                             .background(MaterialTheme.colorScheme.background)
                     ) { strip() }
