@@ -73,6 +73,8 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import io.github.edoppiap.orarilido.data.PrimaryMode
 import io.github.edoppiap.orarilido.data.TravelMode
+import io.github.edoppiap.orarilido.data.MapTheme
+import androidx.compose.ui.draw.alpha
 import io.github.edoppiap.orarilido.schedule.Direction
 import io.github.edoppiap.orarilido.ui.theme.OrariTheme
 import kotlinx.coroutines.launch
@@ -129,7 +131,9 @@ fun MainScreen(
     // in "tu" e "tu + stazione". Cambiando inquadratura si torna all'automatico.
     var lineFraming by remember { mutableStateOf(true) }  // la mappa nasce sulla linea intera
     LaunchedEffect(lineFraming) { circlesByTap = null }
-    val circlesOn = !goActive && (circlesByTap ?: (fullMap && !circlesHeldBack && !lineFraming))
+    // Cerchi spenti nelle Impostazioni: mai, nemmeno toccando il pallino.
+    val circlesOn = state.settings.circlesOn && !goActive &&
+        (circlesByTap ?: (fullMap && !circlesHeldBack && !lineFraming))
     /** Il percorso suggerito è disegnato sulla mappa (solo in "tu + stazione", lo decide LineMap). */
     var routeOnMap by remember { mutableStateOf(false) }
     // Direzione scelta a mano nella striscia a mappa piena, e per quale stazione.
@@ -156,12 +160,23 @@ fun MainScreen(
     // Si cambia colore quando il bordo della tendina entra sotto la barra.
     val sheetUnderStatusBar by remember(statusBarPx) { derivedStateOf { sheet.offset < statusBarPx } }
     val appIsLight = MaterialTheme.colorScheme.background.luminance() > 0.5f
-    val lightIcons = if (overlayOpen || sheetUnderStatusBar) !appIsLight else state.mapNight
+    // Stile della mappa scelto nelle Impostazioni: Auto = giorno/notte col sole.
+    val mapNight = when (state.settings.mapTheme) {
+        MapTheme.AUTO -> state.mapNight
+        MapTheme.APP -> !appIsLight
+        MapTheme.LIGHT -> false
+        MapTheme.DARK -> true
+    }
+    val lightIcons = if (overlayOpen || sheetUnderStatusBar) !appIsLight else mapNight
     val view = LocalView.current
     SideEffect {
         val window = (view.context as? Activity)?.window ?: return@SideEffect
         // "Appearance light" = sfondo chiaro, quindi icone SCURE.
-        WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !lightIcons
+        val insets = WindowCompat.getInsetsController(window, view)
+        insets.isAppearanceLightStatusBars = !lightIcons
+        // In basso c'è sempre la tendina (o una pagina): segue il tema dell'app,
+        // anche quando è diverso da quello del telefono.
+        insets.isAppearanceLightNavigationBars = appIsLight
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -183,11 +198,12 @@ fun MainScreen(
             background = {
                 MapLayer(
                     state = state,
+                    mapNight = mapNight,
                     bottomPadding = coveredHeight,
                     controlsLift = controlsLift,
                     showCircles = circlesOn,
                     // Tocco sul pallino: inverte quello che vedi adesso.
-                    onUserClick = { circlesByTap = !circlesOn },
+                    onUserClick = { if (state.settings.circlesOn) circlesByTap = !circlesOn },
                     // Chi sposta la mappa vuole vederla: la tendina scende a "mappa piena".
                     // Cerchi trattenuti, a meno che tu non li avessi appena accesi a mano.
                     onMapGesture = {
@@ -210,7 +226,9 @@ fun MainScreen(
                     onRouteVisible = { routeOnMap = it },
                     onLineFraming = { lineFraming = it },
                     // Punti di interesse: solo a mappa piena e mai in Go (non "inquinano" la schermata).
-                    showPlaces = fullMap && state.go == null,
+                    // (e solo se accesi nelle Impostazioni, con almeno una categoria).
+                    showPlaces = fullMap && state.go == null &&
+                        state.settings.placesOn && state.settings.placeKinds.isNotEmpty(),
                     onTravelMode = onTravelMode,
                     goActive = goActive,
                     onExitGo = onExitGo,
@@ -255,6 +273,7 @@ fun MainScreen(
 @Composable
 private fun MapLayer(
     state: MainUiState,
+    mapNight: Boolean,
     bottomPadding: Dp,
     controlsLift: () -> Int,
     showCircles: Boolean,
@@ -288,12 +307,13 @@ private fun MapLayer(
             LineMap(
                 stations = state.stations,
                 highlightedIds = state.highlightedIds,
-                night = state.mapNight,
+                night = mapNight,
                 bottomPadding = bottomPadding,
                 controlsLift = controlsLift,
                 userLocation = state.userLocation,
                 nearestStation = state.nearestStation,
                 travelMode = state.travelMode,
+                metersPerMinute = state.settings.metersPerMinute(state.travelMode),
                 showCircles = showCircles,
                 goStations = if (goActive) state.go?.focusStations.orEmpty() else emptyList(),
                 goPinnedId = state.go?.stripStop?.takeIf { it.pinned }?.stationId,
@@ -301,6 +321,7 @@ private fun MapLayer(
                 onRouteVisible = onRouteVisible,
                 onLineFraming = onLineFraming,
                 showPlaces = showPlaces,
+                placeKinds = state.settings.placeKinds,
                 onUserClick = onUserClick,
                 onMapGesture = onMapGesture,
                 onStationClick = onStationClick,
@@ -394,7 +415,7 @@ private fun CollapsedStrip(
                         Text("Nessun treno", fontSize = 15.sp, color = colors.onSurfaceVariant)
                     }
                     b.rows.forEachIndexed { i, row ->
-                        Column(Modifier.weight(if (i == 0) 1.3f else 1f)) {
+                        Column(Modifier.weight(if (i == 0) 1.3f else 1f).alpha(missedAlpha(row))) {
                             Text(
                                 waitText(row),
                                 fontSize = if (i == 0) 20.sp else 15.sp,
@@ -918,7 +939,7 @@ private fun CompactDirectionRow(
         )
         Spacer(Modifier.width(12.dp))
         block.rows.forEachIndexed { i, row ->
-            Column(Modifier.weight(if (i == 0) 1.3f else 1f)) {
+            Column(Modifier.weight(if (i == 0) 1.3f else 1f).alpha(missedAlpha(row))) {
                 Text(
                     waitText(row),
                     fontSize = if (i == 0) lerp(22.sp, 20.sp, p) else lerp(16.sp, 15.sp, p),
@@ -996,6 +1017,15 @@ private fun DirectionPill(
         maxLines = 1,
     )
 }
+
+/**
+ * Impostazioni → treni sbiaditi: un treno che non fai in tempo a prendere
+ * (a piedi o in bici, alla tua velocità) si vede sbiadito. Animato: passa da
+ * pieno a sbiadito in dissolvenza quando "scade".
+ */
+@Composable
+private fun missedAlpha(row: DepartureRow): Float =
+    androidx.compose.animation.core.animateFloatAsState(if (row.missed) 0.35f else 1f, tween(400), label = "missed").value
 
 /** "3 min", "ora", "1 h 05" */
 private fun waitText(row: DepartureRow): String =

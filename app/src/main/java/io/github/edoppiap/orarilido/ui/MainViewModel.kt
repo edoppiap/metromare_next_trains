@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.edoppiap.orarilido.OrariApp
+import io.github.edoppiap.orarilido.data.AppSettings
 import io.github.edoppiap.orarilido.data.PrimaryMode
 import io.github.edoppiap.orarilido.data.TravelMode
 import io.github.edoppiap.orarilido.location.Geo
@@ -74,6 +75,10 @@ data class MainUiState(
     val simulating: Boolean = false,
     /** Percorso suggerito verso la stazione più vicina (null = nessuno: senza GPS, in Go, fuori zona). */
     val route: RouteUi? = null,
+    /** Le scelte della pagina Impostazioni. */
+    val settings: AppSettings = AppSettings(),
+    /** Es. "9 novembre 2026", per la pagina Impostazioni. */
+    val validFromLong: String = "",
 )
 
 /** Il percorso da disegnare sulla mappa: punti (da te alla stazione) e "12 min". */
@@ -81,7 +86,10 @@ data class RouteUi(
     val stationId: String,
     val mode: TravelMode,
     val points: List<GeoPoint>,
+    /** Minuti mostrati, già alla velocità scelta nelle Impostazioni. */
     val minutes: Int,
+    /** Minuti alla velocità "normale" (quella della rete di strade): servono per riscalare. */
+    val baseMinutes: Double,
 )
 
 /**
@@ -135,6 +143,8 @@ data class DepartureRow(
     val clock: String,       // "08:17" oppure "domani 05:15"
     val unconfirmed: Boolean,
     val imminent: Boolean,   // entro 3 minuti: colore corallo
+    /** Non fai in tempo ad arrivare in stazione (Impostazioni → treni sbiaditi). */
+    val missed: Boolean = false,
 )
 
 /**
@@ -157,6 +167,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var favorites: Set<String> = emptySet()
     private var mode: PrimaryMode = PrimaryMode.NEAREST
     private var travelMode: TravelMode = TravelMode.WALK
+    private var settings = AppSettings()
     /** Ultima posizione nota: SOLO in memoria, mai salvata (privacy). */
     private var userLocation: GeoPoint? = null
 
@@ -215,6 +226,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             favorites = saved.favorites intersect validIds
             mode = saved.mode
             travelMode = saved.travelMode
+            settings = saved.settings
             goDefaults = saved.goStops.filterValues { it in validIds }
             // Se il GPS ha già risposto mentre caricavamo, usiamo subito la posizione.
             userLocation?.let { updateNearest(it) }
@@ -266,7 +278,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         // Modalità Go: se sei sul treno, la mappa ti mostra "agganciato" ai binari,
         // con le fermate davanti evidenziate e la prossima come riferimento.
-        val goState = detector?.state
+        // Modalità treno spenta nelle Impostazioni: come se il riconoscitore non ci fosse
+        // (la simulazione della build di prova funziona comunque).
+        val goState = detector?.state?.takeIf { settings.goOn || simulation != null }
         if (goState == GoState.Off) goDismissed = false  // sceso dal treno: la X non vale più
         val onTrain = (goState as? GoState.OnTrain)?.takeUnless { goDismissed }
         // Inizio di un viaggio: si fissa da sola la fermata scelta l'ultima volta
@@ -291,15 +305,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // più vicina (es. vai a Stella Polare per i posti a sedere, o ad Acilia Sud
         // in bici perché Acilia è in salita: la scegli tu mettendola tra le preferite).
         val focus = if (user == null) null else primary.firstOrNull() ?: byDistance.first()
-        // Percorso suggerito: solo con il GPS, solo verso la stazione di riferimento, mai in Go.
-        if (go == null && user != null && focus != null) updateRoute(user, focus.id) else clearRoute()
+        // Percorso suggerito: solo con il GPS, solo verso la stazione di riferimento, mai in Go,
+        // e solo se non è stato spento nelle Impostazioni.
+        if (settings.routeOn && go == null && user != null && focus != null) updateRoute(user, focus.id) else clearRoute()
+        // Se è cambiata la velocità nelle Impostazioni, i minuti del percorso si riscalano.
+        route = route?.let { it.copy(minutes = scaledMinutes(it.baseMinutes, it.mode)) }
 
         // 14 stazioni × 2 direzioni × 3 treni: calcolo di pochi microsecondi.
         _state.value = MainUiState(
             ready = true,
             mode = mode,
-            primaryCards = primary.map { buildCard(p, it, now) },
-            otherCards = others.map { buildCard(p, it, now) },
+            primaryCards = primary.map { buildCard(p, it, now, go == null) },
+            otherCards = others.map { buildCard(p, it, now, go == null) },
             highlightedIds = if (onTrain != null) onTrain.ahead.map { it.station.id }.toSet() else primaryIds,
             favorites = favorites,
             stations = p.stations,
@@ -311,6 +328,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             go = go,
             simulating = simulation != null,
             route = route,
+            settings = settings,
+            validFromLong = p.validFrom.format(DATE_LONG),
         )
         if (dayRequest != null) buildDay()  // aggiorna anche "passati / prossimo" nella giornata
     }
@@ -360,7 +379,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun onSample(sample: GoSample, feedDetector: Boolean = true) {
         userLocation = sample.point
-        if (feedDetector) detector?.update(sample)
+        // Modalità treno spenta: il riconoscitore non riceve posizioni (salvo in simulazione).
+        if (feedDetector && (settings.goOn || simulation != null)) detector?.update(sample)
         if (provider == null) return  // orario non ancora caricato: ci pensa init
         updateNearest(sample.point)
         refresh()
@@ -398,9 +418,41 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Misura (solo log, come OrariAvvio): quanto costa il calcolo sul telefono.
             android.util.Log.i("OrariAvvio", "Percorso $mode verso $stationId: ${(System.nanoTime() - t0) / 1_000_000} ms" +
                 (found?.let { ", ${it.minutes.roundToInt()} min, ${it.meters.roundToInt()} m" } ?: ", nessuno"))
-            route = found?.let { RouteUi(stationId, mode, it.points, it.minutes.roundToInt().coerceAtLeast(1)) }
-            _state.value = _state.value.copy(route = route)
+            route = found?.let { RouteUi(stationId, mode, it.points, scaledMinutes(it.minutes, mode), it.minutes) }
+            // Con i treni sbiaditi le schede usano i minuti del percorso: si ricalcola tutto.
+            if (settings.fadeMissed) refresh() else _state.value = _state.value.copy(route = route)
         }
+    }
+
+    /**
+     * La rete di strade conta i minuti alla velocità "normale": qui si riportano
+     * alla velocità scelta nelle Impostazioni (lepre = meno minuti).
+     */
+    private fun scaledMinutes(baseMinutes: Double, mode: TravelMode): Int {
+        val normal = if (mode == TravelMode.BIKE) Geo.BIKE_METERS_PER_MINUTE else Geo.WALK_METERS_PER_MINUTE
+        return (baseMinutes * normal / settings.metersPerMinute(mode)).roundToInt().coerceAtLeast(1)
+    }
+
+    /** Pagina Impostazioni: ogni cambio si applica subito e viene salvato. */
+    fun updateSettings(change: (AppSettings) -> AppSettings) {
+        val new = change(settings)
+        if (new == settings) return
+        // Modalità treno spenta: si dimentica anche un riconoscimento a metà.
+        if (!new.goOn && settings.goOn) {
+            detector?.reset()
+            pinnedStopId = null
+        }
+        settings = new
+        refresh()
+        viewModelScope.launch { orariApp.stationPrefs.setSettings(new) }
+    }
+
+    /** Impostazioni → "Cancella preferite e fermate salvate". */
+    fun clearSavedChoices() {
+        favorites = emptySet()
+        goDefaults = emptyMap()
+        refresh()
+        viewModelScope.launch { orariApp.stationPrefs.clearFavoritesAndGoStops() }
     }
 
     private fun clearRoute() {
@@ -597,7 +649,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return if (now.hour < 3) now.toLocalDate().minusDays(1) else now.toLocalDate()
     }
 
-    private fun buildCard(p: ScheduleProvider, station: Station, now: LocalDateTime) = StationCardUi(
+    private fun buildCard(p: ScheduleProvider, station: Station, now: LocalDateTime, fadeAllowed: Boolean): StationCardUi {
+        val reach = if (fadeAllowed) minutesToReach(station) else null
+        return StationCardUi(
         stationId = station.id,
         name = station.name,
         favorite = station.id in favorites,
@@ -610,12 +664,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     title = d.title,
                     terminus = d.terminus,
                     rows = p.nextDepartures(station.id, d.direction, now, ROWS_PER_DIRECTION)
-                        .map { toRow(it, now) },
+                        .map { toRow(it, now, reach) },
                 )
             },
-    )
+        )
+    }
 
-    private fun toRow(dep: Departure, now: LocalDateTime): DepartureRow {
+    /**
+     * Impostazioni → treni sbiaditi: quanti minuti ti servono per arrivare alla
+     * stazione col mezzo scelto (🚶|🚲) e alla velocità impostata. null = non si
+     * sbiadisce niente (impostazione spenta o posizione sconosciuta).
+     * Se c'è il percorso vero verso questa stazione si usa quello; altrimenti la
+     * linea d'aria allungata di [DETOUR] (le strade non vanno mai dritte).
+     */
+    private fun minutesToReach(station: Station): Long? {
+        if (!settings.fadeMissed) return null
+        val user = userLocation ?: return null
+        route?.takeIf { it.stationId == station.id && it.mode == travelMode }?.let { return it.minutes.toLong() }
+        val meters = Geo.distanceMeters(user, station) * DETOUR
+        return kotlin.math.ceil(meters / settings.metersPerMinute(travelMode)).toLong()
+    }
+
+    /** [reachMinutes] = minuti per arrivare in stazione: i treni che partono prima sono "persi". */
+    private fun toRow(dep: Departure, now: LocalDateTime, reachMinutes: Long? = null): DepartureRow {
         val minutes = Duration.between(now, dep.time).toMinutes()  // arrotondato per difetto
         val (wait, unit) = when {
             minutes < 1 -> "ora" to ""
@@ -630,6 +701,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             clock = if (tomorrow) "domani $clock" else clock,
             unconfirmed = dep.unconfirmed,
             imminent = minutes <= 3,
+            missed = reachMinutes != null && minutes < reachMinutes,
         )
     }
 
@@ -648,9 +720,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         const val ROUTE_MAX_BIKE_MIN = 25.0
         /** Simulazione: l'orologio corre 5 volte più veloce (un viaggio di 30 min dura 6 min). */
         const val SIM_SPEED = 5L
+        /** Treni sbiaditi senza percorso: le strade allungano la linea d'aria di circa un terzo. */
+        const val DETOUR = 1.3
         val ROME: ZoneId = ZoneId.of("Europe/Rome")
         val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
         val DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("d/M/yyyy")
+        val DATE_LONG: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.ITALIAN)
         /** Es. "giovedì 12 novembre" */
         val DAY_LABEL: DateTimeFormatter = DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.ITALIAN)
         val DIRECTIONS = listOf(

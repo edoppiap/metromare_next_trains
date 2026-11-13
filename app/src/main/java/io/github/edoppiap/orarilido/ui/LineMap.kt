@@ -109,8 +109,10 @@ fun LineMap(
     /** Posizione dell'utente (null = sconosciuta) e stazione di riferimento (più vicina o preferita più vicina). */
     userLocation: GeoPoint?,
     nearestStation: Station?,
-    /** A piedi o in bici: decide la grandezza dei cerchi. */
+    /** A piedi o in bici: decide l'icona sulle etichette dei cerchi. */
     travelMode: TravelMode,
+    /** Velocità (metri al minuto) del mezzo scelto, dalle Impostazioni: decide la grandezza dei cerchi. */
+    metersPerMinute: Double,
     /** Cerchi visibili? Si accendono/spengono toccando il pallino dell'utente. */
     showCircles: Boolean,
     /**
@@ -131,6 +133,8 @@ fun LineMap(
     onRouteVisible: (Boolean) -> Unit = {},
     /** Punti di interesse (fontanelle, bar, ...) ammessi? Solo a mappa piena e mai in Go. */
     showPlaces: Boolean = false,
+    /** Categorie di punti di interesse scelte nelle Impostazioni. */
+    placeKinds: Set<io.github.edoppiap.orarilido.places.PlaceKind> = io.github.edoppiap.orarilido.places.PlaceKind.entries.toSet(),
     onUserClick: () -> Unit,
     bottomPadding: androidx.compose.ui.unit.Dp,
     /**
@@ -204,9 +208,10 @@ fun LineMap(
             animationSpec = tween(durationMillis = if (circlesVisible) 600 else 350, easing = FastOutSlowInEasing),
         )
     }
-    // Anche il passaggio a piedi <-> in bici fa crescere/restringere i cerchi invece di saltare.
-    val metersPerMinute by animateFloatAsState(
-        targetValue = (if (travelMode == TravelMode.BIKE) Geo.BIKE_METERS_PER_MINUTE else Geo.WALK_METERS_PER_MINUTE).toFloat(),
+    // Anche il passaggio a piedi <-> in bici (o un cambio di velocità nelle Impostazioni)
+    // fa crescere/restringere i cerchi invece di saltare.
+    val circleMetersPerMinute by animateFloatAsState(
+        targetValue = metersPerMinute.toFloat(),
         animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing),
         label = "metersPerMinute",
     )
@@ -287,11 +292,17 @@ fun LineMap(
     val routeVisible = route != null && routeOn && goStations.isEmpty()
     LaunchedEffect(routeVisible) { onRouteVisible(routeVisible) }
     val routeKey = route?.takeIf { routeVisible }?.let { it.stationId to it.mode }
+    // Per quale percorso (stazione + mezzo) vale l'animazione in corso. Quando arriva
+    // un percorso NUOVO (es. passi da "Vicina" a "Preferite"), finché la sua animazione
+    // non parte resta nascosto: prima si vedeva intero per un attimo (drawn era ancora 1),
+    // poi spariva e ricresceva.
+    var animatedRouteKey by remember { mutableStateOf<Pair<String, TravelMode>?>(null) }
     LaunchedEffect(routeKey) {
         if (routeKey != null) {
             // Cresce a mappa FERMA: durante uno zoom o uno spostamento non si vedrebbe.
             androidx.compose.runtime.snapshotFlow { cameraState.isMoving }.first { !it }
             drawn.snapTo(0f)
+            animatedRouteKey = routeKey
             drawn.animateTo(1f, tween(ROUTE_DRAW_MS, easing = FastOutSlowInEasing))
         } else {
             drawn.animateTo(0f, tween(300))
@@ -310,7 +321,7 @@ fun LineMap(
     // Quali disegnare: quelli nello schermo (con un po' di margine), i più vicini al
     // centro, al massimo PLACES_MAX. Si ricalcola quando la mappa si ferma.
     var shownPlaces by remember { mutableStateOf(emptyList<Place>()) }
-    LaunchedEffect(places, cameraState.isMoving, placesOn) {
+    LaunchedEffect(places, cameraState.isMoving, placesOn, placeKinds) {
         if (cameraState.isMoving || !placesOn) return@LaunchedEffect
         val b = cameraState.projection?.visibleRegion?.latLngBounds ?: return@LaunchedEffect
         val dLat = (b.northeast.latitude - b.southwest.latitude) * 0.25
@@ -318,6 +329,7 @@ fun LineMap(
         val c = b.center
         shownPlaces = places
             .filter {
+                it.kind in placeKinds &&
                 it.point.lat in (b.southwest.latitude - dLat)..(b.northeast.latitude + dLat) &&
                     it.point.lon in (b.southwest.longitude - dLon)..(b.northeast.longitude + dLon)
             }
@@ -337,6 +349,31 @@ fun LineMap(
             delay(NAME_REVEAL_MS)
             tappedPlace = null
         }
+    }
+
+    // ---- Etichette dei cerchi ("🚶 5 min", "10 min", "15 min") ----
+    // Stanno tutte e tre sulla stessa linea che parte da te: di solito verso nord
+    // (in cima ai cerchi). Se una finirebbe sotto l'etichetta del percorso, la linea
+    // RUOTA attorno a te fino al primo angolo libero, e le etichette scivolano lungo
+    // i cerchi (animazione). Si ricalcola a mappa ferma, così non ballano durante lo zoom.
+    val labelAngle = remember { Animatable(0f) }  // gradi dal nord, in senso orario
+    LaunchedEffect(cameraState.isMoving, userLocation, shownRoute, routeVisible, metersPerMinute, mapLoaded) {
+        if (cameraState.isMoving || !mapLoaded) return@LaunchedEffect
+        val user = userLocation ?: return@LaunchedEffect
+        val routeMid = shownRoute?.takeIf { routeVisible && it.points.size >= 2 }?.let { r ->
+            routePrefix(r.points, routeCumulative, routeCumulative.last() / 2).last()
+        }
+        val target = circleLabelAngle(
+            user = user,
+            radiiM = WALK_MINUTES.map { it * metersPerMinute },
+            routeLabel = routeMid,
+            zoom = cameraState.position.zoom,
+            bearing = cameraState.position.bearing,
+        )
+        // Per la via più breve (da 350° a 10° si passa per lo 0, non all'indietro).
+        val delta = ((target - labelAngle.value) % 360f + 540f) % 360f - 180f
+        if (growth.value < 0.01f) labelAngle.snapTo(target)  // cerchi nascosti: nessuna animazione
+        else labelAngle.animateTo(labelAngle.value + delta, tween(450, easing = FastOutSlowInEasing))
     }
 
     // Direzione in cui punta il telefono (null = sensore assente o posizione ignota).
@@ -532,7 +569,7 @@ fun LineMap(
                 }
             }
             // Percorso suggerito: puntini grigi (non è un binario), sotto stazioni e pallino.
-            val f = drawn.value
+            val f = if (routeKey != null && routeKey != animatedRouteKey) 0f else drawn.value
             if (shownRoute != null && f > 0.001f && shownRoute.points.size >= 2) {
                 val total = routeCumulative.last()
                 val partial = routePrefix(shownRoute.points, routeCumulative, total * f)
@@ -603,7 +640,7 @@ fun LineMap(
                 val emoji = if (travelMode == TravelMode.BIKE) "🚲" else "🚶"
                 val g = growth.value
                 if (g > 0.01f) WALK_MINUTES.forEach { minutes ->
-                    val radius = minutes * metersPerMinute.toDouble() * g
+                    val radius = minutes * circleMetersPerMinute.toDouble() * g
                     Circle(
                         center = center,
                         radius = radius,
@@ -612,10 +649,16 @@ fun LineMap(
                         strokeWidth = with(density) { 1.dp.toPx() },
                         fillColor = androidx.compose.ui.graphics.Color.Transparent,
                     )
-                    // Etichetta "5 min" in cima al cerchio (1° di latitudine ≈ 111 km).
+                    // Etichetta "5 min" sul cerchio, nella direzione scelta da labelAngle
+                    // (1° di latitudine ≈ 111 km; quello di longitudine si accorcia con cos(lat)).
+                    val angle = Math.toRadians(labelAngle.value.toDouble())
+                    val labelPos = LatLng(
+                        user.lat + radius * kotlin.math.cos(angle) / M_PER_DEG,
+                        user.lon + radius * kotlin.math.sin(angle) / (M_PER_DEG * kotlin.math.cos(Math.toRadians(user.lat))),
+                    )
                     MarkerComposable(
                         keys = arrayOf<Any>("walk", minutes, dark, travelMode),
-                        state = rememberUpdatedMarkerState(LatLng(user.lat + radius / 111_320.0, user.lon)),
+                        state = rememberUpdatedMarkerState(labelPos),
                         anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
                         zIndex = 0.5f,
                         alpha = g,  // le etichette sfumano insieme ai cerchi
@@ -743,6 +786,53 @@ private const val ROUTE_DRAW_MS = 800
 
 /** Cerchi intorno all'utente: minuti a piedi o in bici. */
 private val WALK_MINUTES = listOf(5, 10, 15)
+/** Metri in un grado di latitudine. */
+private const val M_PER_DEG = 111_320.0
+/** Misure approssimate (dp) delle etichette "🚶 15 min" e "🚶 12 min", più un po' di aria. */
+private const val CIRCLE_LABEL_W = 54f
+private const val CIRCLE_LABEL_H = 16f
+private const val ROUTE_LABEL_W = 74f
+private const val ROUTE_LABEL_H = 28f
+private const val LABEL_GAP = 6f
+
+/**
+ * Angolo (gradi dal nord, senso orario) della linea su cui mettere le tre
+ * etichette dei cerchi. Si prova prima il nord (0°), poi 20°, −20°, 40°, −40°…
+ * e si sceglie il primo in cui nessuna delle tre si sovrappone all'etichetta del
+ * percorso [routeLabel]. Il confronto si fa in dp sullo schermo: dipende dallo
+ * zoom e dalla rotazione della mappa ([bearing]), perché le etichette restano
+ * sempre dritte sullo schermo mentre la mappa gira.
+ * Inoltre la linea non deve mettere le tre etichette una sull'altra (succede se
+ * è quasi orizzontale con lo zoom lontano), a meno che non succeda già col nord.
+ */
+private fun circleLabelAngle(user: GeoPoint, radiiM: List<Double>, routeLabel: LatLng?, zoom: Float, bearing: Float): Float {
+    if (routeLabel == null) return 0f
+    // Metri per dp a questo zoom (le mappe Google: 256 dp per il mondo intero a zoom 0).
+    val cosLat = kotlin.math.cos(Math.toRadians(user.lat))
+    val metersPerDp = 156_543.034 * cosLat / Math.pow(2.0, zoom.toDouble())
+    val b = Math.toRadians(bearing.toDouble())
+    // Da (est, nord) in metri a (x a destra, y in su) in dp sullo schermo.
+    fun toScreen(east: Double, north: Double): Pair<Double, Double> =
+        Pair((east * kotlin.math.cos(b) - north * kotlin.math.sin(b)) / metersPerDp,
+             (east * kotlin.math.sin(b) + north * kotlin.math.cos(b)) / metersPerDp)
+    val route = toScreen((routeLabel.longitude - user.lon) * M_PER_DEG * cosLat, (routeLabel.latitude - user.lat) * M_PER_DEG)
+
+    fun labels(deg: Double): List<Pair<Double, Double>> {
+        val a = Math.toRadians(deg)
+        return radiiM.map { r -> toScreen(r * kotlin.math.sin(a), r * kotlin.math.cos(a)) }
+    }
+    fun overlap(p: Pair<Double, Double>, q: Pair<Double, Double>, w: Float, h: Float) =
+        kotlin.math.abs(p.first - q.first) < w + LABEL_GAP && kotlin.math.abs(p.second - q.second) < h + LABEL_GAP
+    fun hitsRoute(deg: Double) = labels(deg).any {
+        overlap(it, route, (CIRCLE_LABEL_W + ROUTE_LABEL_W) / 2, (CIRCLE_LABEL_H + ROUTE_LABEL_H) / 2)
+    }
+    fun stacked(deg: Double) = labels(deg).zipWithNext().any { (p, q) -> overlap(p, q, CIRCLE_LABEL_W, CIRCLE_LABEL_H) }
+
+    val stackedAtNorth = stacked(0.0)
+    val candidates = listOf(0.0) + (1..9).flatMap { listOf(it * 20.0, -it * 20.0) }
+    val best = candidates.firstOrNull { !hitsRoute(it) && (stackedAtNorth || !stacked(it)) } ?: 0.0
+    return ((best + 360.0) % 360.0).toFloat()
+}
 /** Oltre questa distanza dalla stazione più vicina, niente zoom automatico. */
 private const val MAX_ZOOM_DISTANCE_M = 30_000.0
 private const val MAX_ZOOM = 16f

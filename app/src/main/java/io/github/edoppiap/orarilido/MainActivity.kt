@@ -37,6 +37,9 @@ import io.github.edoppiap.orarilido.ui.InfoPage
 import io.github.edoppiap.orarilido.ui.InfoScreen
 import io.github.edoppiap.orarilido.ui.MainScreen
 import io.github.edoppiap.orarilido.ui.MainViewModel
+import io.github.edoppiap.orarilido.ui.SettingsPage
+import io.github.edoppiap.orarilido.data.AppTheme
+import androidx.compose.foundation.isSystemInDarkTheme
 import io.github.edoppiap.orarilido.ui.theme.OrariTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,8 +67,14 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            OrariTheme {
-                val state by viewModel.state.collectAsState()
+            val state by viewModel.state.collectAsState()
+            // Tema dell'app scelto nelle Impostazioni (Sistema = come il telefono).
+            val dark = when (state.settings.appTheme) {
+                AppTheme.SYSTEM -> isSystemInDarkTheme()
+                AppTheme.LIGHT -> false
+                AppTheme.DARK -> true
+            }
+            OrariTheme(darkTheme = dark) {
                 val day by viewModel.day.collectAsState()
                 // Pagina del menu aperta (null = chiuso). "Saveable": sopravvive alla rotazione.
                 var infoPage by rememberSaveable { mutableStateOf<InfoPage?>(null) }
@@ -119,9 +128,21 @@ class MainActivity : ComponentActivity() {
                             },
                             label = "infoPages",
                         ) { page ->
-                            InfoScreen(page, onNavigate = { infoPage = it }, debugActions = debugActions(state.simulating) {
-                                infoPage = null  // si chiude il menu per vedere la simulazione
-                            })
+                            InfoScreen(
+                                page,
+                                onNavigate = { infoPage = it },
+                                debugActions = debugActions(state.simulating) {
+                                    infoPage = null  // si chiude il menu per vedere la simulazione
+                                },
+                                settingsContent = {
+                                    SettingsPage(
+                                        settings = state.settings,
+                                        validFrom = state.validFromLong,
+                                        onChange = viewModel::updateSettings,
+                                        onClearSaved = viewModel::clearSavedChoices,
+                                    )
+                                },
+                            )
                         }
                     }
                 }

@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,6 +33,7 @@ import androidx.compose.ui.unit.sp
 /** Le pagine del menu. */
 enum class InfoPage(val title: String) {
     MENU("Menu"),
+    SETTINGS("Impostazioni"),
     STORY("La storia di questa app"),
     PRIVACY("Privacy"),
     TERMS("Termini d'uso"),
@@ -47,6 +50,8 @@ fun InfoScreen(
     onNavigate: (InfoPage?) -> Unit,
     /** Voci solo per la build di prova (es. simulatore della modalità Go). */
     debugActions: List<Pair<String, () -> Unit>> = emptyList(),
+    /** Contenuto della pagina Impostazioni (lo fornisce MainActivity, che ha il ViewModel). */
+    settingsContent: @Composable () -> Unit = {},
 ) {
     val back = { onNavigate(if (page == InfoPage.MENU) null else InfoPage.MENU) }
     BackHandler(onBack = back)
@@ -73,6 +78,8 @@ fun InfoScreen(
             if (page == InfoPage.MENU) {
                 MenuList(onNavigate)
                 if (debugActions.isNotEmpty()) DebugList(debugActions)
+            } else if (page == InfoPage.SETTINGS) {
+                settingsContent()
             } else {
                 Text(
                     INFO_TEXTS.getValue(page),
@@ -125,28 +132,11 @@ private fun DebugList(actions: List<Pair<String, () -> Unit>>) {
 @Composable
 private fun MenuList(onNavigate: (InfoPage) -> Unit) {
     val colors = MaterialTheme.colorScheme
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(colors.surface),
-    ) {
-        val pages = listOf(InfoPage.STORY, InfoPage.PRIVACY, InfoPage.TERMS, InfoPage.CREDITS)
-        pages.forEachIndexed { i, p ->
-            if (i > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.outlineVariant)
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { onNavigate(p) }
-                    .padding(start = 16.dp, end = 8.dp, top = 14.dp, bottom = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(p.title, modifier = Modifier.weight(1f), fontSize = 16.sp, color = colors.onSurface)
-                Chevron(colors.onSurfaceVariant, pointsLeft = false)
-            }
-        }
-    }
-    // Versione dell'app, letta dal sistema.
+    // Impostazioni in un riquadro a sé, sopra le pagine informative.
+    MenuCard(listOf(InfoPage.SETTINGS), onNavigate)
+    Spacer(Modifier.height(12.dp))
+    MenuCard(listOf(InfoPage.STORY, InfoPage.PRIVACY, InfoPage.TERMS, InfoPage.CREDITS), onNavigate)
+// Versione dell'app, letta dal sistema.
     val context = LocalContext.current
     val version = runCatching {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName
@@ -162,6 +152,32 @@ private fun MenuList(onNavigate: (InfoPage) -> Unit) {
         fontSize = 12.sp,
         color = colors.onSurfaceVariant,
     )
+}
+
+/** Un riquadro con alcune voci del menu, separate da una riga. */
+@Composable
+private fun MenuCard(pages: List<InfoPage>, onNavigate: (InfoPage) -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(colors.surface),
+    ) {
+        pages.forEachIndexed { i, p ->
+            if (i > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.outlineVariant)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { onNavigate(p) }
+                    .padding(start = 16.dp, end = 8.dp, top = 14.dp, bottom = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(p.title, modifier = Modifier.weight(1f), fontSize = 16.sp, color = colors.onSurface)
+                Chevron(colors.onSurfaceVariant, pointsLeft = false)
+            }
+        }
+    }
 }
 
 private const val REPO = "github.com/edoppiap/metromare_next_trains"
@@ -189,7 +205,7 @@ private val INFO_TEXTS = mapOf(
         Se dai il permesso, la posizione serve solo a trovare la stazione più vicina, calcolare le distanze, disegnare i cerchi sulla mappa e calcolare il percorso suggerito fino alla stazione. Il percorso è calcolato interamente sul telefono, con una mappa delle strade inclusa nell'app: la tua posizione non viene inviata a nessun servizio di navigazione. Viene letta solo mentre l'app è aperta, resta sul telefono e non viene mai salvata né inviata dal codice dell'app. Puoi negare il permesso: l'app funziona lo stesso.
 
         Cosa resta sul telefono
-        Solo le tue scelte: ultima stazione usata, stazioni preferite, "Vicina/Preferite", "a piedi/in bici". Nessuna coordinata. Si cancellano disinstallando l'app.
+        Solo le tue scelte: ultima stazione usata, stazioni preferite, "Vicina/Preferite", "a piedi/in bici", le fermate scelte in treno e le impostazioni. Nessuna coordinata. Preferite e fermate si cancellano dalle Impostazioni, tutto il resto disinstallando l'app.
 
         Connessioni a internet
         La mappa è fornita da Google Maps: per mostrarla il telefono scarica le immagini della zona inquadrata dai server di Google, che ricevono dati tecnici come l'indirizzo IP e l'area visualizzata, secondo l'informativa di Google (policies.google.com/privacy).
