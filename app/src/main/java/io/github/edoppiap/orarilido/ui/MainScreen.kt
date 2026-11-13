@@ -25,14 +25,19 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.BottomSheetScaffold
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberBottomSheetScaffoldState
-import androidx.compose.material3.rememberStandardBottomSheetState
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
+import kotlin.math.roundToInt
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,24 +65,18 @@ import io.github.edoppiap.orarilido.data.TravelMode
 import io.github.edoppiap.orarilido.schedule.Direction
 import io.github.edoppiap.orarilido.ui.theme.OrariTheme
 import kotlinx.coroutines.launch
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.unit.Velocity
-
 /**
  * Schermata principale, stile Citymapper: mappa a tutto schermo e sopra
- * una tendina trascinabile, alta 1/3 all'apertura. Nella tendina:
+ * una tendina con tre altezze (vedi [SheetStop]):
+ *   - all'apertura occupa poco più di metà schermo: gli orari contano più della mappa;
+ *   - tutta su: solo orari;
+ *   - tutta giù ("mappa piena"): resta una striscia coi prossimi treni della
+ *     stazione in primo piano, e sulla mappa compaiono i cerchi a piedi/in bici.
+ * Nella tendina:
  *   - "In primo piano": la stazione più vicina oppure le preferite
  *   - "Altre stazioni": tutte le altre, per distanza
  * Tocco sugli orari di una scheda = orari di tutta la giornata.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
     state: MainUiState,
@@ -89,96 +88,182 @@ fun MainScreen(
 ) {
     if (!state.ready) return  // dura pochi ms: la finestra resta sullo sfondo
 
-    val sheetState = rememberStandardBottomSheetState(initialValue = SheetValue.PartiallyExpanded)
-    val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
+    val sheet = rememberMapSheetState()
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
-    // Cerchi intorno all'utente: si nascondono/mostrano toccando il suo pallino.
+    val density = LocalDensity.current
+    // Cerchi intorno all'utente: solo a mappa piena; il tocco sul pallino li spegne/accende.
     var showCircles by rememberSaveable { mutableStateOf(true) }
+    val fullMap = sheet.stop == SheetStop.COLLAPSED
 
-    // Con la tendina alzata, "indietro" la riporta a 1/3 invece di chiudere l'app.
-    BackHandler(enabled = sheetState.currentValue == SheetValue.Expanded) {
-        scope.launch { sheetState.partialExpand() }
-    }
+    // "Indietro" con la tendina tutta su o tutta giù la riporta a metà invece di chiudere l'app.
+    BackHandler(enabled = sheet.stop != SheetStop.HALF) { sheet.animateTo(SheetStop.HALF) }
 
-    // BoxWithConstraints ci dice quanto è alto lo schermo, per calcolare 1/3.
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val sheetHeight = maxHeight / 3  // altezza della tendina a 1/3
-        BottomSheetScaffold(
-            scaffoldState = scaffoldState,
-            sheetPeekHeight = sheetHeight,
-            // Sfondo della tendina = sfondo dell'app; le schede sopra sono più chiare.
-            sheetContainerColor = MaterialTheme.colorScheme.background,
-            sheetDragHandle = { DragHandle() },
-            sheetContent = {
-                // A tendina alzata del tutto, lascia spazio alla barra di stato in alto.
-                val expanded = sheetState.targetValue == SheetValue.Expanded
-                SheetContent(state, listState, expanded, onOpenDay, onModeChange, onToggleFavorite)
+        val screenHeight = maxHeight
+        val navBar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        // Parte di mappa coperta dalla tendina, quando è ferma: la mappa centra le
+        // cose nello spazio che resta. Animata, così la mappa scivola invece di saltare.
+        val coveredHeight by animateDpAsState(
+            targetValue = if (fullMap) PEEK_HEIGHT + navBar else screenHeight * HALF_FRACTION,
+            animationSpec = tween(350),
+            label = "mapPadding",
+        )
+        // Pulsanti della mappa: seguono il bordo della tendina, ma non salgono oltre la metà.
+        val halfTopPx = with(density) { (screenHeight * (1f - HALF_FRACTION)).toPx() }
+        val screenPx = with(density) { screenHeight.toPx() }
+        val controlsLift = { (screenPx - maxOf(sheet.offset, halfTopPx)).roundToInt() }
+
+        MapSheetLayout(
+            state = sheet,
+            listAtTop = { !listState.canScrollBackward },
+            peekHeight = PEEK_HEIGHT,
+            halfFraction = HALF_FRACTION,
+            background = {
+                MapLayer(
+                    state = state,
+                    bottomPadding = coveredHeight,
+                    controlsLift = controlsLift,
+                    showCircles = showCircles && fullMap,
+                    onUserClick = { showCircles = !showCircles },
+                    onStationClick = { id ->
+                        // Tocco su una stazione: la tendina (se serve) risale e scorre alla sua scheda.
+                        if (fullMap) sheet.animateTo(SheetStop.HALF)
+                        val index = sheetItems(state).indexOfFirst { it is SheetItem.Card && it.card.stationId == id }
+                        if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
+                    },
+                    onMenu = onMenu,
+                    travelToggleVisible = state.userLocation != null && showCircles && fullMap,
+                    onTravelMode = onTravelMode,
+                )
+            },
+            strip = {
+                val card = state.primaryCards.firstOrNull() ?: state.otherCards.firstOrNull()
+                if (card != null) CollapsedStrip(card, onClick = { sheet.animateTo(SheetStop.HALF) })
             },
         ) {
-            // Il "corpo" dietro la tendina: la mappa, a TUTTO schermo, così si
-            // vede anche dietro gli angoli smussati della tendina.
-            //
-            // Velocità: creare la mappa Google costa centinaia di ms. Per non
-            // ritardare gli orari, al primo fotogramma c'è solo lo sfondo;
-            // la mappa viene creata subito DOPO che gli orari sono a schermo.
-            var showMap by remember { mutableStateOf(false) }
-            LaunchedEffect(Unit) {
-                withFrameNanos { }  // aspetta che il primo fotogramma sia disegnato
-                showMap = true
+            SheetContent(state, listState, onOpenDay, onModeChange, onToggleFavorite)
+        }
+    }
+}
+
+/** Mappa con i pulsanti sopra (menu, a piedi/in bici). */
+@Composable
+private fun MapLayer(
+    state: MainUiState,
+    bottomPadding: Dp,
+    controlsLift: () -> Int,
+    showCircles: Boolean,
+    onUserClick: () -> Unit,
+    onStationClick: (String) -> Unit,
+    onMenu: () -> Unit,
+    travelToggleVisible: Boolean,
+    onTravelMode: (TravelMode) -> Unit,
+) {
+    // Velocità: creare la mappa Google costa centinaia di ms. Per non
+    // ritardare gli orari, al primo fotogramma c'è solo lo sfondo;
+    // la mappa viene creata subito DOPO che gli orari sono a schermo.
+    var showMap by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        withFrameNanos { }  // aspetta che il primo fotogramma sia disegnato
+        showMap = true
+    }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        if (showMap) {
+            LineMap(
+                stations = state.stations,
+                highlightedIds = state.highlightedIds,
+                night = state.mapNight,
+                bottomPadding = bottomPadding,
+                controlsLift = controlsLift,
+                userLocation = state.userLocation,
+                nearestStation = state.nearestStation,
+                travelMode = state.travelMode,
+                showCircles = showCircles,
+                onUserClick = onUserClick,
+                onStationClick = onStationClick,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        // Pulsanti sopra la mappa: menu a sinistra, a piedi/in bici a destra.
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MapButton(onClick = onMenu) { MenuIcon(MaterialTheme.colorScheme.onSurface) }
+            Spacer(Modifier.weight(1f))
+            // Il selettore serve solo quando ci sono i cerchi (mappa piena, posizione nota).
+            AnimatedVisibility(visible = travelToggleVisible, enter = fadeIn(), exit = fadeOut()) {
+                TravelToggle(state.travelMode, onTravelMode)
             }
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background)
-            ) {
-                if (showMap) {
-                    LineMap(
-                        stations = state.stations,
-                        highlightedIds = state.highlightedIds,
-                        night = state.mapNight,
-                        bottomPadding = sheetHeight,
-                        userLocation = state.userLocation,
-                        nearestStation = state.nearestStation,
-                        travelMode = state.travelMode,
-                        showCircles = showCircles,
-                        onUserClick = { showCircles = !showCircles },
-                        // Tocco su una stazione della mappa: la tendina scorre alla sua scheda.
-                        onStationClick = { id ->
-                            val index = sheetItems(state).indexOfFirst { it is SheetItem.Card && it.card.stationId == id }
-                            if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-                // Pulsanti sopra la mappa: menu a sinistra, a piedi/in bici a destra.
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    MapButton(onClick = onMenu) { MenuIcon(MaterialTheme.colorScheme.onSurface) }
-                    Spacer(Modifier.weight(1f))
-                    // Il selettore serve solo quando ci sono i cerchi (posizione nota e cerchi accesi).
-                    if (state.userLocation != null && showCircles) TravelToggle(state.travelMode, onTravelMode)
+        }
+    }
+}
+
+/**
+ * Striscia mostrata a mappa piena: la stazione in primo piano e il primo
+ * treno per direzione. Tocco = la tendina torna a metà.
+ *   Acilia                          1,8 km
+ *   [Roma] 3 min 08:03   [Ostia] 8 min 08:08
+ */
+@Composable
+private fun CollapsedStrip(card: StationCardUi, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                card.name,
+                modifier = Modifier.weight(1f),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = colors.onBackground,
+                maxLines = 1,
+            )
+            card.distance?.let { Text(it, fontSize = 13.sp, color = colors.onSurfaceVariant) }
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            card.blocks.forEach { block ->
+                val row = block.rows.firstOrNull()
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    // "Verso Roma" -> "Roma": qui lo spazio è poco.
+                    DirectionPill(block.title.removePrefix("Verso "), fontSize = 12.sp)
+                    Spacer(Modifier.width(8.dp))
+                    if (row != null) {
+                        Text(
+                            waitText(row),
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (row.imminent) colors.tertiary else colors.onBackground,
+                            maxLines = 1,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(clockText(row), fontSize = 12.sp, color = colors.onSurfaceVariant, maxLines = 1)
+                    } else {
+                        Text("—", fontSize = 16.sp, color = colors.onSurfaceVariant)
+                    }
                 }
             }
         }
     }
 }
 
-/** Maniglia della tendina, più bassa di quella standard per lasciare spazio alle schede. */
-@Composable
-private fun DragHandle() {
-    Box(
-        Modifier
-            .padding(top = 8.dp, bottom = 6.dp)
-            .size(width = 36.dp, height = 4.dp)
-            .background(MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(2.dp))
-    )
-}
+/** Altezza della striscia a mappa piena (maniglia esclusa, barra di navigazione esclusa). */
+private val PEEK_HEIGHT = 84.dp
+/** Parte di schermo occupata dalla tendina all'apertura. */
+private const val HALF_FRACTION = 0.55f
 
 // ---- Elementi della tendina, nell'ordine in cui compaiono ----
 
@@ -205,7 +290,6 @@ private fun sheetItems(state: MainUiState): List<SheetItem> = buildList {
 private fun SheetContent(
     state: MainUiState,
     listState: LazyListState,
-    expanded: Boolean,
     onOpenDay: (String, Direction) -> Unit,
     onModeChange: (PrimaryMode) -> Unit,
     onToggleFavorite: (String) -> Unit,
@@ -215,15 +299,14 @@ private fun SheetContent(
 
     LazyColumn(
         Modifier
-            .sheetScrollGuard(listState)
             .fillMaxWidth()
             .fillMaxHeight(),  // a tendina alzata occupa tutto lo schermo
         state = listState,
         contentPadding = PaddingValues(
             start = 12.dp,
             end = 12.dp,
-            top = if (expanded) WindowInsets.statusBars.asPaddingValues().calculateTopPadding() else 0.dp,
-            bottom = 24.dp,
+            // In fondo, spazio per la barra di navigazione di Android.
+            bottom = 24.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
         ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -240,39 +323,6 @@ private fun SheetContent(
             }
         }
     }
-}
-
-/**
- * Evita che scorrendo le stazioni la tendina si abbassi "per sbaglio".
- *
- * Normalmente, quando la lista arriva in cima, lo scorrimento avanzato (il resto
- * del trascinamento o lo slancio del dito) passa alla tendina, che scende.
- * Qui lo "mangiamo" noi, a meno che il dito non sia appoggiato quando la lista
- * era GIÀ in cima: in quel caso trascinare giù vuol dire davvero abbassarla.
- */
-@Composable
-private fun Modifier.sheetScrollGuard(listState: LazyListState): Modifier {
-    // Non serve ridisegnare quando cambia: basta una "scatola" con un booleano.
-    val startedAtTop = remember { booleanArrayOf(true) }
-    val guard = remember {
-        object : NestedScrollConnection {
-            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
-                // available.y > 0 = avanzo verso il basso, che abbasserebbe la tendina.
-                if (!startedAtTop[0] && available.y > 0f) Offset(0f, available.y) else Offset.Zero
-
-            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity =
-                if (!startedAtTop[0]) available else Velocity.Zero
-        }
-    }
-    return this
-        .pointerInput(listState) {
-            awaitEachGesture {
-                // Pass "Initial" = lo vediamo prima della lista, senza consumarlo.
-                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                startedAtTop[0] = !listState.canScrollBackward
-            }
-        }
-        .nestedScroll(guard)
 }
 
 /** "In primo piano          [📍 Vicina | ⭐ Preferite]" */
@@ -425,7 +475,11 @@ private fun CompactDirectionRow(block: DirectionBlock, onClick: () -> Unit) {
 }
 
 @Composable
-private fun DirectionPill(text: String, modifier: Modifier = Modifier) {
+private fun DirectionPill(
+    text: String,
+    modifier: Modifier = Modifier,
+    fontSize: androidx.compose.ui.unit.TextUnit = 14.sp,
+) {
     Text(
         text,
         modifier = modifier
@@ -433,7 +487,7 @@ private fun DirectionPill(text: String, modifier: Modifier = Modifier) {
             .padding(horizontal = 10.dp, vertical = 4.dp),
         color = MaterialTheme.colorScheme.onPrimary,
         fontWeight = FontWeight.Bold,
-        fontSize = 14.sp,
+        fontSize = fontSize,
         maxLines = 1,
     )
 }

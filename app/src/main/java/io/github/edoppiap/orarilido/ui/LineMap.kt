@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -95,6 +96,12 @@ fun LineMap(
     showCircles: Boolean,
     onUserClick: () -> Unit,
     bottomPadding: androidx.compose.ui.unit.Dp,
+    /**
+     * Di quanti px vanno alzati i pulsanti (centra, bussola) per stare sopra la
+     * tendina. È una funzione letta solo al momento di disegnare: così i pulsanti
+     * seguono il dito senza ricalcolare tutta la mappa a ogni fotogramma.
+     */
+    controlsLift: () -> Int,
     onStationClick: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -360,7 +367,8 @@ fun LineMap(
             exit = fadeOut(tween(durationMillis = 600, delayMillis = 800)),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 12.dp, bottom = bottomPadding + 12.dp + 44.dp + 10.dp),
+                .offset { androidx.compose.ui.unit.IntOffset(0, -controlsLift()) }
+                .padding(end = 12.dp, bottom = 12.dp + 44.dp + 10.dp),
         ) {
             CompassButton(
                 bearing = bearing,
@@ -386,7 +394,8 @@ fun LineMap(
             onClick = onRecenter,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 12.dp, bottom = bottomPadding + 12.dp),
+                .offset { androidx.compose.ui.unit.IntOffset(0, -controlsLift()) }
+                .padding(end = 12.dp, bottom = 12.dp),
         )
     }
 }
