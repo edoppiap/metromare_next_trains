@@ -91,15 +91,20 @@ fun MainScreen(
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val density = LocalDensity.current
-    // Cerchi intorno all'utente: solo a mappa piena; il tocco sul pallino li spegne/accende.
-    var showCircles by rememberSaveable { mutableStateOf(true) }
     val fullMap = sheet.stop == SheetStop.COLLAPSED
-    // Mappa piena raggiunta spostando la mappa col dito: stai cercando qualcosa,
-    // quindi niente cerchi automatici (restano a un tocco sul pallino).
-    // Si azzera appena la tendina lascia la mappa piena.
+    // ---- Cerchi intorno all'utente ----
+    // In automatico: visibili solo a mappa piena, tranne se ci sei arrivato
+    // spostando la mappa col dito (stai cercando qualcosa: sarebbero una distrazione).
+    // Il tocco sul pallino vince sull'automatico, a qualunque altezza della tendina;
+    // quando la tendina cambia altezza si torna all'automatico.
     var circlesHeldBack by remember { mutableStateOf(false) }
-    LaunchedEffect(fullMap) { if (!fullMap) circlesHeldBack = false }
-    val circlesOn = showCircles && fullMap && !circlesHeldBack
+    /** Scelta fatta toccando il pallino: null = decide l'automatico. */
+    var circlesByTap by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(sheet.stop) {
+        circlesByTap = null
+        if (!fullMap) circlesHeldBack = false
+    }
+    val circlesOn = circlesByTap ?: (fullMap && !circlesHeldBack)
     // Direzione scelta a mano nella striscia a mappa piena, e per quale stazione.
     // Vale solo per quella stazione: se cambia, si torna alla direzione predefinita.
     var stripChoiceStation by rememberSaveable { mutableStateOf<String?>(null) }
@@ -130,19 +135,13 @@ fun MainScreen(
                     bottomPadding = coveredHeight,
                     controlsLift = controlsLift,
                     showCircles = circlesOn,
-                    // Tocco sul pallino: accende/spegne i cerchi (se erano trattenuti, li accende).
-                    onUserClick = {
-                        if (circlesHeldBack) {
-                            circlesHeldBack = false
-                            showCircles = true
-                        } else {
-                            showCircles = !showCircles
-                        }
-                    },
+                    // Tocco sul pallino: inverte quello che vedi adesso.
+                    onUserClick = { circlesByTap = !circlesOn },
                     // Chi sposta la mappa vuole vederla: la tendina scende a "mappa piena".
+                    // Cerchi trattenuti, a meno che tu non li avessi appena accesi a mano.
                     onMapGesture = {
                         if (sheet.stop == SheetStop.HALF) {
-                            circlesHeldBack = true
+                            circlesHeldBack = circlesByTap != true
                             sheet.animateTo(SheetStop.COLLAPSED)
                         }
                     },
