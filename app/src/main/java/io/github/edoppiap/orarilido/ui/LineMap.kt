@@ -329,6 +329,7 @@ fun LineMap(
                         anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
                         zIndex = 0.5f,
                         alpha = g,  // le etichette sfumano insieme ai cerchi
+                        onClick = { true },  // tocco sull'etichetta: niente centratura di Google
                     ) {
                         WalkLabel("$emoji $minutes min", night)
                     }
@@ -343,6 +344,10 @@ fun LineMap(
                         flat = true,
                         rotation = degrees,
                         zIndex = 2.5f,  // sotto il pallino, sopra le stazioni
+                        // Il cono è più grande del pallino: un tocco "quasi sul pallino"
+                        // cade qui. Stesso effetto del pallino, e true = Google non
+                        // centra la mappa (comportamento predefinito dei marker).
+                        onClick = { onUserClick(); true },
                     ) {
                         HeadingCone(night)
                     }
