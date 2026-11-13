@@ -220,8 +220,8 @@ private fun DayScreenPreview() {
                 dateLabel = "giovedì 12 novembre",
                 dayTypeLabel = "Orario feriale",
                 directions = listOf(
-                    DirectionTab(Direction.TO_ROMA, "Verso Roma"),
                     DirectionTab(Direction.TO_OSTIA, "Verso Ostia"),
+                    DirectionTab(Direction.TO_ROMA, "Verso Roma"),
                 ),
                 selectedDirection = Direction.TO_ROMA,
                 hours = (5..9).map { h ->

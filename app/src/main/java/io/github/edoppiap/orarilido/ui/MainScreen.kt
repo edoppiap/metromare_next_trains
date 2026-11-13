@@ -94,6 +94,10 @@ fun MainScreen(
     // Cerchi intorno all'utente: solo a mappa piena; il tocco sul pallino li spegne/accende.
     var showCircles by rememberSaveable { mutableStateOf(true) }
     val fullMap = sheet.stop == SheetStop.COLLAPSED
+    // Direzione scelta a mano nella striscia a mappa piena, e per quale stazione.
+    // Vale solo per quella stazione: se cambia, si torna alla direzione predefinita.
+    var stripChoiceStation by rememberSaveable { mutableStateOf<String?>(null) }
+    var stripChoiceDirection by rememberSaveable { mutableStateOf(Direction.TO_ROMA) }
 
     // "Indietro" con la tendina tutta su o tutta giù la riporta a metà invece di chiudere l'app.
     BackHandler(enabled = sheet.stop != SheetStop.HALF) { sheet.animateTo(SheetStop.HALF) }
@@ -136,7 +140,16 @@ fun MainScreen(
             },
             strip = {
                 val card = state.primaryCards.firstOrNull() ?: state.otherCards.firstOrNull()
-                if (card != null) CollapsedStrip(card, onClick = { sheet.animateTo(SheetStop.HALF) })
+                if (card != null) CollapsedStrip(
+                    card = card,
+                    direction = if (stripChoiceStation == card.stationId) stripChoiceDirection
+                        else defaultStripDirection(card.stationId),
+                    onDirection = {
+                        stripChoiceStation = card.stationId
+                        stripChoiceDirection = it
+                    },
+                    onClick = { sheet.animateTo(SheetStop.HALF) },
+                )
             },
         ) {
             SheetContent(state, listState, onOpenDay, onModeChange, onToggleFavorite)
@@ -207,51 +220,78 @@ private fun MapLayer(
 }
 
 /**
- * Striscia mostrata a mappa piena: la stazione in primo piano e il primo
- * treno per direzione. Tocco = la tendina torna a metà.
- *   Acilia                          1,8 km
- *   [Roma] 3 min 08:03   [Ostia] 8 min 08:08
+ * Striscia mostrata a mappa piena: la stazione in primo piano e i prossimi
+ * tre treni in UNA direzione, scelta col selettore (di solito ne interessa una).
+ * Tocco fuori dal selettore = la tendina torna a metà.
+ *   Acilia Sud/Dragona                    1,8 km
+ *   [Ostia | Roma]   3 min    18 min    33 min
+ *                    08:03    08:18     08:33
  */
 @Composable
-private fun CollapsedStrip(card: StationCardUi, onClick: () -> Unit) {
+private fun CollapsedStrip(
+    card: StationCardUi,
+    direction: Direction,
+    onDirection: (Direction) -> Unit,
+    onClick: () -> Unit,
+) {
     val colors = MaterialTheme.colorScheme
+    // Ai capolinea c'è una sola direzione: si mostra quella, senza selettore.
+    val block = card.blocks.firstOrNull { it.direction == direction } ?: card.blocks.firstOrNull() ?: return
     Column(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 4.dp),
+            .padding(start = 20.dp, end = 12.dp, top = 2.dp, bottom = 4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 card.name,
                 modifier = Modifier.weight(1f),
-                fontSize = 16.sp,
+                fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
                 color = colors.onBackground,
                 maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
             card.distance?.let { Text(it, fontSize = 13.sp, color = colors.onSurfaceVariant) }
         }
         Spacer(Modifier.height(6.dp))
+        // Selettore a sinistra, orari a destra, sulla stessa riga (come nelle schede).
         Row(verticalAlignment = Alignment.CenterVertically) {
-            card.blocks.forEach { block ->
-                val row = block.rows.firstOrNull()
-                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                    // "Verso Roma" -> "Roma": qui lo spazio è poco.
-                    DirectionPill(block.title.removePrefix("Verso "), fontSize = 12.sp)
-                    Spacer(Modifier.width(8.dp))
-                    if (row != null) {
-                        Text(
-                            waitText(row),
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (row.imminent) colors.tertiary else colors.onBackground,
-                            maxLines = 1,
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(clockText(row), fontSize = 12.sp, color = colors.onSurfaceVariant, maxLines = 1)
-                    } else {
-                        Text("—", fontSize = 16.sp, color = colors.onSurfaceVariant)
+            if (card.blocks.size > 1) {
+                SegmentedToggle(
+                    options = listOf(Direction.TO_OSTIA to "Ostia", Direction.TO_ROMA to "Roma"),
+                    selected = block.direction,
+                    onSelect = onDirection,
+                    segmentPadding = 10.dp,
+                )
+            } else {
+                // Capolinea: una sola direzione, pillola fissa.
+                DirectionPill(block.title.removePrefix("Verso "))
+            }
+            Spacer(Modifier.width(12.dp))
+            // Cambiando direzione, i vecchi orari sfumano nei nuovi.
+            androidx.compose.animation.Crossfade(
+                targetState = block,
+                animationSpec = tween(250),
+                label = "stripTimes",
+                modifier = Modifier.weight(1f),
+            ) { b ->
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    if (b.rows.isEmpty()) {
+                        Text("Nessun treno", fontSize = 15.sp, color = colors.onSurfaceVariant)
+                    }
+                    b.rows.forEachIndexed { i, row ->
+                        Column(Modifier.weight(if (i == 0) 1.3f else 1f)) {
+                            Text(
+                                waitText(row),
+                                fontSize = if (i == 0) 20.sp else 15.sp,
+                                fontWeight = if (i == 0) FontWeight.Bold else FontWeight.SemiBold,
+                                color = if (row.imminent) colors.tertiary else colors.onBackground,
+                                maxLines = 1,
+                            )
+                            Text(clockText(row), fontSize = 12.sp, color = colors.onSurfaceVariant, maxLines = 1)
+                        }
                     }
                 }
             }
@@ -259,8 +299,17 @@ private fun CollapsedStrip(card: StationCardUi, onClick: () -> Unit) {
     }
 }
 
-/** Altezza della striscia a mappa piena (maniglia esclusa, barra di navigazione esclusa). */
-private val PEEK_HEIGHT = 84.dp
+/**
+ * Direzione mostrata di default nella striscia: verso Roma, tranne che dalle
+ * stazioni già a Roma, da dove di solito si va verso Ostia.
+ */
+private fun defaultStripDirection(stationId: String): Direction =
+    if (stationId in ROMA_SIDE_STATIONS) Direction.TO_OSTIA else Direction.TO_ROMA
+
+private val ROMA_SIDE_STATIONS = setOf("porta_san_paolo", "basilica_san_paolo", "eur_magliana")
+
+/** Parte di tendina visibile a mappa piena: maniglia + striscia (barra di navigazione esclusa). */
+private val PEEK_HEIGHT = 116.dp
 /** Parte di schermo occupata dalla tendina all'apertura. */
 private const val HALF_FRACTION = 0.55f
 

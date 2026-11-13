@@ -277,7 +277,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 DayType.SATURDAY -> "Orario del sabato"
                 DayType.HOLIDAY -> "Orario festivo"
             },
-            directions = DIRECTIONS
+            // Nel selettore: prima Ostia poi Roma, come sulla mappa (Ostia a sinistra, Roma a destra).
+            directions = DIRECTIONS.reversed()
                 .filter { p.servesDirection(req.stationId, it.direction) }
                 .map { DirectionTab(it.direction, it.title) },
             selectedDirection = req.direction,
