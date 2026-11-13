@@ -31,12 +31,27 @@ android {
         manifestPlaceholders["MAPS_API_KEY"] = localProperties.getProperty("MAPS_API_KEY", "")
     }
 
+    // Chiave di firma della release. Il file .jks e la sua password NON sono nel
+    // progetto: il percorso e la password stanno in local.properties (escluso da git).
+    // Il telefono accetta un aggiornamento solo se firmato con la STESSA chiave:
+    // perdere il file .jks = non poter più aggiornare l'app già installata.
+    val releaseStoreFile = localProperties.getProperty("RELEASE_STORE_FILE")
+    signingConfigs {
+        if (releaseStoreFile != null) {
+            create("release") {
+                storeFile = file(releaseStoreFile)
+                storePassword = localProperties.getProperty("RELEASE_STORE_PASSWORD")
+                keyAlias = localProperties.getProperty("RELEASE_KEY_ALIAS")
+                keyPassword = localProperties.getProperty("RELEASE_STORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TEMPORANEO: firma con la chiave di debug, solo per provare e misurare
-            // la build ottimizzata sul telefono. Prima di distribuire l'app
-            // andrà creata una chiave vera (fuori da git).
-            signingConfig = signingConfigs.getByName("debug")
+            // Senza la chiave (es. su un altro PC) si firma con quella di debug,
+            // così il progetto compila comunque.
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             optimization {
                 // R8 ottimizza e riduce tutto il codice (nostro + librerie).
                 // NB: limitarlo ad alcuni pacchetti (packageScope, come nel modello
