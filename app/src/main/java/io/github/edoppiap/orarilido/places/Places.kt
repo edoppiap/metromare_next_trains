@@ -6,13 +6,13 @@ import io.github.edoppiap.orarilido.location.GeoPoint
  * Tipi di punti di interesse (da OpenStreetMap), nello STESSO ordine di CATS
  * in tools/osm_graph.py: il file salva solo l'indice.
  */
-enum class PlaceKind(val emoji: String, val label: String) {
-    WATER("💧", "Fontanella"),
-    BAR("☕", "Bar"),
-    BIKE_SHOP("🔧", "Ciclofficina"),
-    PHARMACY("💊", "Farmacia"),
-    SUPERMARKET("🛒", "Supermercato"),
-    TOILET("🚻", "Bagni"),
+enum class PlaceKind(val label: String) {
+    WATER("Fontanella"),
+    BAR("Bar"),
+    BIKE_SHOP("Ciclofficina"),
+    PHARMACY("Farmacia"),
+    SUPERMARKET("Supermercato"),
+    TOILET("Bagni"),
 }
 
 /** Un punto di interesse: tipo, posizione e nome (vuoto se OSM non lo ha). */

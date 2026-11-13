@@ -724,49 +724,14 @@ private fun loadPlaces(context: Context): List<Place> =
     Places.parse(context.assets.open("pois.bin").use { it.readBytes() })
 
 /**
- * Icona di un punto di interesse, SENZA sfondo (scelta dell'utente: niente tondino).
- * Farmacia = croce verde disegnata a mano (come le insegne); gli altri tipi =
- * la loro emoji, con un'ombra leggerissima per staccarla dalla mappa.
+ * Icona di un punto di interesse, SENZA sfondo (scelta dell'utente: niente tondino):
+ * disegni piatti fatti a mano in PlaceIcons.kt, col bordino del colore delle schede.
  * Disegnata una volta sola per tipo.
  */
-private fun placeIcon(kind: PlaceKind, night: Boolean, density: Float): BitmapDescriptor {
-    val size = (24 * density).toInt()
-    val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
-    val canvas = android.graphics.Canvas(bmp)
-    val c = size / 2f
-    if (kind == PlaceKind.PHARMACY) {
-        // Croce greca: due bracci uguali, spessore 1/3 della misura.
-        val arm = 8f * density   // metà lunghezza di un braccio
-        val half = 2.8f * density // metà spessore
-        val cross = android.graphics.Path().apply {
-            addRect(c - arm, c - half, c + arm, c + half, android.graphics.Path.Direction.CW)
-            addRect(c - half, c - arm, c + half, c + arm, android.graphics.Path.Direction.CW)
-            op(android.graphics.Path().apply { addRect(c - arm, c - half, c + arm, c + half, android.graphics.Path.Direction.CW) },
-                android.graphics.Path.Op.UNION)
-        }
-        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
-        // Bordino chiaro (scuro di notte) per non perdersi sulle strade.
-        paint.style = android.graphics.Paint.Style.STROKE
-        paint.strokeWidth = 2f * density
-        paint.strokeJoin = android.graphics.Paint.Join.ROUND
-        paint.color = (if (night) CardDark else Card).toArgb()
-        canvas.drawPath(cross, paint)
-        paint.style = android.graphics.Paint.Style.FILL
-        paint.color = PHARMACY_GREEN
-        canvas.drawPath(cross, paint)
-    } else {
-        val text = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            textSize = 17 * density
-            textAlign = android.graphics.Paint.Align.CENTER
-            setShadowLayer(1.5f * density, 0f, 0.5f * density, android.graphics.Color.argb(90, 0, 0, 0))
-        }
-        canvas.drawText(kind.emoji, c, c - (text.descent() + text.ascent()) / 2, text)
-    }
-    return BitmapDescriptorFactory.fromBitmap(bmp)
-}
-
-/** Verde delle insegne delle farmacie. */
-private const val PHARMACY_GREEN = 0xFF1E9E4A.toInt()
+private fun placeIcon(kind: PlaceKind, night: Boolean, density: Float): BitmapDescriptor =
+    BitmapDescriptorFactory.fromBitmap(
+        drawPlaceIcon(kind, night, (if (night) CardDark else Card).toArgb(), density)
+    )
 
 /** Da questo zoom in su compaiono i punti di interesse (15 ≈ isolato). */
 private const val PLACES_MIN_ZOOM = 15f
