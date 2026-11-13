@@ -221,7 +221,7 @@ private val INFO_TEXTS = mapOf(
         Orario
         Orario ufficiale Metromare (Roma–Lido) in vigore dal 9 novembre 2026, pubblicato da Astral / Regione Lazio.
 
-        Stazioni e tracciato della linea
+        Stazioni, tracciato della linea, strade per i percorsi suggeriti e punti di interesse
         © OpenStreetMap contributors, dati disponibili con licenza ODbL (openstreetmap.org/copyright).
 
         Mappa
