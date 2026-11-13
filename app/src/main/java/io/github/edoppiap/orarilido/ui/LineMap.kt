@@ -43,6 +43,9 @@ import com.google.maps.android.compose.CameraMoveStartedReason
 import com.google.maps.android.compose.Circle
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.MapProperties
+import com.google.maps.android.compose.MapEffect
+import com.google.maps.android.compose.MapsComposeExperimentalApi
+import androidx.compose.ui.layout.onSizeChanged
 import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.MarkerComposable
 import com.google.maps.android.compose.Polyline
@@ -73,6 +76,7 @@ import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.log2
 import kotlin.math.tan
+import kotlinx.coroutines.flow.first
 
 /**
  * Mappa Google con la linea, le stazioni e (fase 4) la posizione dell'utente.
@@ -80,6 +84,7 @@ import kotlin.math.tan
  * [bottomPadding] = altezza della tendina: la mappa "sa" che quella parte è
  * coperta e centra la linea nello spazio visibile sopra.
  */
+@OptIn(MapsComposeExperimentalApi::class)  // per MapEffect
 @Composable
 fun LineMap(
     stations: List<Station>,
@@ -102,6 +107,8 @@ fun LineMap(
      * seguono il dito senza ricalcolare tutta la mappa a ogni fotogramma.
      */
     controlsLift: () -> Int,
+    /** L'utente ha iniziato a spostare la mappa col dito. */
+    onMapGesture: () -> Unit,
     onStationClick: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -202,6 +209,7 @@ fun LineMap(
     LaunchedEffect(cameraState.isMoving) {
         if (cameraState.isMoving && cameraState.cameraMoveStartedReason == CameraMoveStartedReason.GESTURE) {
             framing = null
+            onMapGesture()
         }
     }
     val scope = rememberCoroutineScope()
@@ -222,39 +230,60 @@ fun LineMap(
         null -> if (userLocation != null) RecenterTarget.USER else cycle.first()
         else -> cycle[(cycle.indexOf(current) + 1) % cycle.size]  // indexOf = −1 → il primo
     }
-    val onRecenter: () -> Unit = {
-        val target = nextTarget
-        framing = target
-        val margin = with(density) { 72.dp.roundToPx() }
-        scope.launch {
-            val points = when (target) {
-                RecenterTarget.USER -> emptyList()
-                RecenterTarget.USER_AND_STATION ->
-                    listOf(LatLng(focusStation!!.lat, focusStation.lon), LatLng(userLocation!!.lat, userLocation.lon))
-                RecenterTarget.STATION -> listOf(LatLng(focusStation!!.lat, focusStation.lon))
-                RecenterTarget.LINE -> stations.map { LatLng(it.lat, it.lon) }
-            }
-            when {
-                target == RecenterTarget.USER ->
-                    cameraState.animate(CameraUpdateFactory.newLatLngZoom(LatLng(userLocation!!.lat, userLocation.lon), USER_ZOOM), 600)
-                points.size == 1 ->
-                    cameraState.animate(CameraUpdateFactory.newLatLngZoom(points.first(), USER_ZOOM), 600)
-                else -> {
-                    val bounds = LatLngBounds.builder().apply { points.forEach { include(it) } }.build()
-                    cameraState.animate(CameraUpdateFactory.newLatLngBounds(bounds, margin), 600)
-                    if (target != RecenterTarget.LINE && cameraState.position.zoom > MAX_ZOOM) {
-                        cameraState.animate(CameraUpdateFactory.zoomTo(MAX_ZOOM), 300)
-                    }
+    /**
+     * Porta la mappa sull'inquadratura [target], nello spazio visibile sopra la
+     * tendina. La usano il pulsante "centra", il cambio di altezza della tendina
+     * e lo spostamento dell'utente (vedi sotto).
+     */
+    suspend fun applyFraming(target: RecenterTarget, durationMs: Int) {
+        val user = userLocation?.let { LatLng(it.lat, it.lon) }
+        val station = focusStation?.let { LatLng(it.lat, it.lon) }
+        val points = when (target) {
+            RecenterTarget.USER -> listOfNotNull(user)
+            RecenterTarget.USER_AND_STATION -> listOfNotNull(station, user)
+            RecenterTarget.STATION -> listOfNotNull(station)
+            RecenterTarget.LINE -> stations.map { LatLng(it.lat, it.lon) }
+        }
+        when (points.size) {
+            0 -> return  // niente da inquadrare (es. GPS perso nel frattempo)
+            1 -> cameraState.animate(CameraUpdateFactory.newLatLngZoom(points.first(), USER_ZOOM), durationMs)
+            else -> {
+                val bounds = LatLngBounds.builder().apply { points.forEach { include(it) } }.build()
+                val margin = with(density) { 72.dp.roundToPx() }
+                cameraState.animate(CameraUpdateFactory.newLatLngBounds(bounds, margin), durationMs)
+                if (target != RecenterTarget.LINE && cameraState.position.zoom > MAX_ZOOM) {
+                    cameraState.animate(CameraUpdateFactory.zoomTo(MAX_ZOOM), 300)
                 }
             }
         }
     }
 
+    val onRecenter: () -> Unit = {
+        val target = nextTarget
+        framing = target
+        scope.launch { applyFraming(target, 600) }
+    }
+
+    // Modalità "tu" o "tu + stazione" attiva: la mappa ti segue quando ti sposti.
+    LaunchedEffect(userLocation) {
+        val current = framing
+        if (mapLoaded && (current == RecenterTarget.USER || current == RecenterTarget.USER_AND_STATION)) {
+            applyFraming(current, 500)
+        }
+    }
+
+    // Spazio coperto dalla tendina ATTUALMENTE applicato alla mappa (vedi MapEffect più giù).
+    var appliedPadding by remember { mutableStateOf(bottomPadding) }
+    // Misura della mappa in px, per sapere dove cade il centro dello spazio visibile.
+    var mapSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+
     Box(modifier) {
         GoogleMap(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .onSizeChanged { mapSize = it },
             cameraPositionState = cameraState,
-            contentPadding = PaddingValues(bottom = bottomPadding),
+            contentPadding = PaddingValues(bottom = appliedPadding),
             properties = remember(dark) {
                 MapProperties(
                     mapStyleOptions = MapStyleOptions.loadRawResourceStyle(
@@ -271,6 +300,30 @@ fun LineMap(
             ),
             onMapLoaded = { mapLoaded = true },
         ) {
+            // La tendina ha cambiato altezza: cambia lo spazio visibile della mappa.
+            // Google centra le cose nello spazio NON coperto; se cambiassimo solo
+            // quello, la mappa farebbe un salto. Quindi, nello stesso istante:
+            //  1. prendiamo il punto della mappa che oggi sta dove cadrà il nuovo centro,
+            //  2. cambiamo lo spazio coperto e mettiamo la camera su quel punto
+            //     (a occhio non si muove niente);
+            //  3. se c'è un'inquadratura attiva, la rifacciamo con un'animazione,
+            //     così lo zoom si adatta allo spazio nuovo.
+            MapEffect(bottomPadding) { map ->
+                if (bottomPadding == appliedPadding) return@MapEffect
+                // Se il dito sta ancora spostando la mappa, aspettiamo che finisca:
+                // spostare la camera durante il gesto lo farebbe "scattare".
+                androidx.compose.runtime.snapshotFlow { cameraState.isMoving }.first { !it }
+                val newPx = with(density) { bottomPadding.roundToPx() }
+                if (mapLoaded && mapSize.height > 0) {
+                    val keep = map.projection.fromScreenLocation(
+                        android.graphics.Point(mapSize.width / 2, (mapSize.height - newPx) / 2)
+                    )
+                    map.setPadding(0, 0, 0, newPx)
+                    map.moveCamera(CameraUpdateFactory.newLatLng(keep))
+                }
+                appliedPadding = bottomPadding  // ora anche Compose sa del nuovo spazio
+                framing?.let { applyFraming(it, 500) }
+            }
             if (linePoints.isNotEmpty()) {
                 Polyline(points = linePoints, color = lineColor, width = with(density) { 5.dp.toPx() })
             }
@@ -394,7 +447,8 @@ fun LineMap(
         // In basso a destra, appena sopra la tendina.
         RecenterButton(
             next = nextTarget,
-            active = framing == RecenterTarget.USER,
+            // Blu = c'è un'inquadratura attiva (la mappa la mantiene); grigio = mappa spostata a mano.
+            active = framing != null,
             night = night,
             onClick = onRecenter,
             modifier = Modifier

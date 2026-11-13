@@ -26,7 +26,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -102,13 +101,9 @@ fun MainScreen(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val screenHeight = maxHeight
         val navBar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-        // Parte di mappa coperta dalla tendina, quando è ferma: la mappa centra le
-        // cose nello spazio che resta. Animata, così la mappa scivola invece di saltare.
-        val coveredHeight by animateDpAsState(
-            targetValue = if (fullMap) PEEK_HEIGHT + navBar else screenHeight * HALF_FRACTION,
-            animationSpec = tween(350),
-            label = "mapPadding",
-        )
+        // Parte di mappa coperta dalla tendina, quando è ferma: la mappa inquadra
+        // le cose nello spazio che resta (e se cambia, riadatta lo zoom: vedi LineMap).
+        val coveredHeight = if (fullMap) PEEK_HEIGHT + navBar else screenHeight * HALF_FRACTION
         // Pulsanti della mappa: seguono il bordo della tendina, ma non salgono oltre la metà.
         val halfTopPx = with(density) { (screenHeight * (1f - HALF_FRACTION)).toPx() }
         val screenPx = with(density) { screenHeight.toPx() }
@@ -126,6 +121,8 @@ fun MainScreen(
                     controlsLift = controlsLift,
                     showCircles = showCircles && fullMap,
                     onUserClick = { showCircles = !showCircles },
+                    // Chi sposta la mappa vuole vederla: la tendina scende a "mappa piena".
+                    onMapGesture = { if (sheet.stop == SheetStop.HALF) sheet.animateTo(SheetStop.COLLAPSED) },
                     onStationClick = { id ->
                         // Tocco su una stazione: la tendina (se serve) risale e scorre alla sua scheda.
                         if (fullMap) sheet.animateTo(SheetStop.HALF)
@@ -155,6 +152,7 @@ private fun MapLayer(
     controlsLift: () -> Int,
     showCircles: Boolean,
     onUserClick: () -> Unit,
+    onMapGesture: () -> Unit,
     onStationClick: (String) -> Unit,
     onMenu: () -> Unit,
     travelToggleVisible: Boolean,
@@ -185,6 +183,7 @@ private fun MapLayer(
                 travelMode = state.travelMode,
                 showCircles = showCircles,
                 onUserClick = onUserClick,
+                onMapGesture = onMapGesture,
                 onStationClick = onStationClick,
                 modifier = Modifier.fillMaxSize(),
             )
