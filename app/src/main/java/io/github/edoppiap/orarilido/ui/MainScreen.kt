@@ -154,6 +154,28 @@ fun MainScreen(
     LaunchedEffect(Unit) {
         snapshotFlow { sheet.collapseProgress > 0.02f }.collect { if (it) listState.animateScrollToItem(0) }
     }
+    // A mappa piena l'intestazione ("In primo piano" + selettore) è chiusa ad
+    // altezza zero, e la lista considera "in cima" la prima scheda: risalendo,
+    // l'intestazione si riaprirebbe FUORI dalla vista, sopra il bordo. Quindi,
+    // appena la tendina risale, la lista torna in cima (posizione 0): così
+    // l'intestazione si riapre al suo posto, spingendo giù le schede.
+    // ECCEZIONE: se risale perché hai toccato una stazione sulla mappa, la lista
+    // sta andando a quella stazione e non va riportata in cima.
+    val goingToStation = remember { booleanArrayOf(false) }  // non serve ridisegnare: basta una scatola
+    LaunchedEffect(Unit) {
+        var previous = sheet.collapseProgress
+        snapshotFlow { sheet.collapseProgress }.collect { p ->
+            val risale = p < previous
+            previous = p
+            // Il ricordo vale finché non si torna a mappa piena: NON basta arrivare
+            // a metà, perché l'animazione elastica supera la metà e poi si assesta
+            // (e quell'assestamento sembrerebbe una nuova risalita).
+            if (p == 1f) goingToStation[0] = false
+            if (risale && !goingToStation[0] && listState.firstVisibleItemIndex > 0 && !listState.isScrollInProgress) {
+                listState.scrollToItem(0)
+            }
+        }
+    }
 
     // "Indietro" con la tendina tutta su o tutta giù la riporta a metà invece di chiudere l'app.
     BackHandler(enabled = sheet.stop != SheetStop.HALF) { sheet.animateTo(SheetStop.HALF) }
@@ -224,7 +246,10 @@ fun MainScreen(
                     },
                     onStationClick = { id ->
                         // Tocco su una stazione: la tendina (se serve) risale e scorre alla sua scheda.
-                        if (fullMap) sheet.animateTo(SheetStop.HALF)
+                        if (fullMap) {
+                            goingToStation[0] = true  // niente "ritorno in cima" durante questa risalita
+                            sheet.animateTo(SheetStop.HALF)
+                        }
                         val index = sheetItems(state).indexOfFirst {
                             (it is SheetItem.Card && it.card.stationId == id) || (it is SheetItem.GoStop && it.stop.stationId == id)
                         }
@@ -266,6 +291,10 @@ fun MainScreen(
             SheetContent(
                 state, listState, onOpenDay, onModeChange, onToggleFavorite, onPinStop,
                 collapse = { sheet.collapseProgress },
+                // A tendina non tutta su, la parte bassa della lista è sotto il bordo
+                // dello schermo: tanto spazio in più in fondo, così anche le ultime
+                // stazioni possono salire nella parte visibile (tocco sulla mappa).
+                hiddenBelow = if (sheet.stop == SheetStop.EXPANDED) 0.dp else screenHeight * (1f - HALF_FRACTION),
                 stripDirection = stripCard?.let {
                     if (stripChoiceStation == it.stationId) stripChoiceDirection else defaultStripDirection(it.stationId)
                 },
@@ -523,6 +552,8 @@ private fun SheetContent(
     onPinStop: (String) -> Unit,
     /** Quanto è scesa la tendina verso la mappa piena (0–1): la prima scheda si trasforma. */
     collapse: () -> Float = { 0f },
+    /** Parte della lista nascosta sotto il bordo dello schermo: diventa spazio in più in fondo. */
+    hiddenBelow: androidx.compose.ui.unit.Dp = 0.dp,
     /** Direzione mostrata nella striscia: la riga che resta nella scheda che si trasforma. */
     stripDirection: Direction? = null,
 ) {
@@ -541,8 +572,8 @@ private fun SheetContent(
         contentPadding = PaddingValues(
             start = 12.dp,
             end = 12.dp,
-            // In fondo, spazio per la barra di navigazione di Android.
-            bottom = 14.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
+            // In fondo, spazio per la barra di navigazione di Android (+ la parte nascosta).
+            bottom = 14.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + hiddenBelow,
         ),
         // Niente spazio automatico tra gli elementi: ognuno ha il suo sotto di sé
         // (vedi il Box qui sotto), così chi si chiude porta via anche il proprio spazio.
