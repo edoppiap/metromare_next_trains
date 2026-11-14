@@ -78,6 +78,10 @@ class MainActivity : ComponentActivity() {
                 val day by viewModel.day.collectAsState()
                 // Pagina del menu aperta (null = chiuso). "Saveable": sopravvive alla rotazione.
                 var infoPage by rememberSaveable { mutableStateOf<InfoPage?>(null) }
+                // Pagina "Bus sostitutivi" aperta dalla giornata (non dal menu).
+                var busInfoOpen by rememberSaveable { mutableStateOf(false) }
+                // Chiusa la giornata, si chiude anche lei (se no riaprendo una giornata ricomparirebbe).
+                androidx.compose.runtime.LaunchedEffect(day == null) { if (day == null) busInfoOpen = false }
                 // La giornata si apre SOPRA la schermata principale: così la mappa
                 // resta viva sotto e tornando indietro non va ricaricata.
                 Box {
@@ -106,8 +110,18 @@ class MainActivity : ComponentActivity() {
                                 onBack = viewModel::closeDay,
                                 onShiftDay = viewModel::shiftDay,
                                 onDirection = viewModel::setDayDirection,
+                                onBusInfo = { busInfoOpen = true },
                             )
                         }
+                    }
+                    // "Cos'è?" nella giornata: la pagina sui bus sostitutivi entra da destra,
+                    // sopra la giornata; "indietro" torna lì.
+                    AnimatedVisibility(
+                        visible = busInfoOpen && day != null,
+                        enter = slideInHorizontally { it } + fadeIn(),
+                        exit = slideOutHorizontally { it } + fadeOut(),
+                    ) {
+                        InfoScreen(InfoPage.BUSES, onNavigate = { busInfoOpen = false }, standalone = true)
                     }
 
                     // Menu: entra da sinistra (dove sta il pulsante ☰) e lì ritorna.

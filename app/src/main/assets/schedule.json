@@ -54,5 +54,36 @@
     "2026-12-08", "2026-12-25", "2026-12-26",
     "2027-01-01", "2027-01-06", "2027-03-29", "2027-04-25", "2027-05-01", "2027-06-02",
     "2027-06-29", "2027-08-15", "2027-11-01", "2027-12-08", "2027-12-25", "2027-12-26"
-  ]
+  ],
+  "replacementBuses": {
+    "source": "cotralspa.it/metromare (14/11/2026): bus sostitutivi dal 2 novembre 2026, lun-ven. Fermate: codici Cotral, coordinate dal GTFS di Roma Servizi per la Mobilita (CC-BY 4.0), versi verificati con le linee Atac.",
+    "days": ["weekday"],
+    "departures": { "toOstia": ["23:00"], "toRoma": ["23:45"] },
+    "stops": [
+      { "station": "cristoforo_colombo", "direction": "toRoma", "code": "77163", "name": "Staz.ne Cristoforo Colombo", "lat": 41.714235, "lon": 12.321693 },
+      { "station": "castel_fusano", "direction": "toOstia", "code": "78701", "name": "V.le Stazione Castel Fusano", "lat": 41.719957, "lon": 12.308102 },
+      { "station": "castel_fusano", "direction": "toRoma", "code": "78701", "name": "V.le Stazione Castel Fusano", "lat": 41.719957, "lon": 12.308102 },
+      { "station": "stella_polare", "direction": "toOstia", "code": "77115", "name": "Vega/Staz.ne Stella Polare", "lat": 41.726367, "lon": 12.294453 },
+      { "station": "stella_polare", "direction": "toRoma", "code": "71190", "name": "Vega/Staz.ne Stella Polare", "lat": 41.726767, "lon": 12.294480 },
+      { "station": "lido_centro", "direction": "toOstia", "code": "f10874", "name": "P.le della Stazione del Lido (Cotral)", "lat": 41.733178, "lon": 12.283543 },
+      { "station": "lido_centro", "direction": "toRoma", "code": "f10874", "name": "P.le della Stazione del Lido (Cotral)", "lat": 41.733178, "lon": 12.283543 },
+      { "station": "lido_nord", "direction": "toOstia", "code": "82042", "name": "Romagnoli/Azzorre", "lat": 41.740353, "lon": 12.283892 },
+      { "station": "lido_nord", "direction": "toRoma", "code": "76520", "name": "Canarie", "lat": 41.739058, "lon": 12.282478 },
+      { "station": "ostia_antica", "direction": "toOstia", "code": "76783", "name": "Romagnoli/Scavi Ostia Antica", "lat": 41.758033, "lon": 12.299577 },
+      { "station": "ostia_antica", "direction": "toRoma", "code": "76803", "name": "Romagnoli/Scavi Ostia Antica", "lat": 41.758293, "lon": 12.300095 },
+      { "station": "acilia", "direction": "toOstia", "code": "76762", "name": "Romagnoli/Staz.ne Acilia", "lat": 41.784413, "lon": 12.360825 },
+      { "station": "acilia", "direction": "toRoma", "code": "76675", "name": "Ostiense/Staz.ne Acilia", "lat": 41.783952, "lon": 12.361100 },
+      { "station": "casal_bernocchi", "direction": "toOstia", "code": "74859", "name": "Ostiense/Staz.ne Casal Bernocchi", "lat": 41.790188, "lon": 12.378047 },
+      { "station": "casal_bernocchi", "direction": "toRoma", "code": "79652", "name": "Ostiense/Staz.ne Casal Bernocchi", "lat": 41.789348, "lon": 12.376540 },
+      { "station": "vitinia", "direction": "toOstia", "code": "71296", "name": "Ostiense/Staz.ne Vitinia", "lat": 41.795702, "lon": 12.402705 },
+      { "station": "vitinia", "direction": "toRoma", "code": "71178", "name": "Ostiense/Staz.ne Vitinia", "lat": 41.795663, "lon": 12.403610 },
+      { "station": "tor_di_valle", "direction": "toOstia", "code": "76933", "name": "Ostiense/Tor di Valle", "lat": 41.819887, "lon": 12.436483 },
+      { "station": "tor_di_valle", "direction": "toRoma", "code": "71212", "name": "Ostiense/Staz.ne Tor di Valle", "lat": 41.819663, "lon": 12.436447 },
+      { "station": "eur_magliana", "direction": "toOstia", "code": "75137", "name": "Val Fiorita", "lat": 41.838730, "lon": 12.464025 },
+      { "station": "eur_magliana", "direction": "toRoma", "code": "73163", "name": "Val Fiorita", "lat": 41.839213, "lon": 12.464423 },
+      { "station": "basilica_san_paolo", "direction": "toOstia", "code": "71906", "name": "Ostiense/Efeso", "lat": 41.854842, "lon": 12.477040 },
+      { "station": "basilica_san_paolo", "direction": "toRoma", "code": "71920", "name": "Ostiense/Efeso", "lat": 41.854603, "lon": 12.477155 },
+      { "station": "porta_san_paolo", "direction": "toOstia", "code": "73593", "name": "P.le Ostiense-Piramide", "lat": 41.875907, "lon": 12.481872 }
+    ]
+  }
 }

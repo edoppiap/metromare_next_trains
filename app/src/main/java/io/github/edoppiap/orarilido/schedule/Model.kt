@@ -45,6 +45,48 @@ data class Departure(
 )
 
 /**
+ * Fermata di un bus sostitutivo vicino a una stazione, per un verso
+ * (le due fermate di una stazione sono spesso su lati o strade diverse).
+ */
+data class BusStop(
+    val stationId: String,
+    val direction: Direction,
+    /** Codice della palina (Atac o Cotral), come nella pagina Cotral. */
+    val code: String,
+    val name: String,
+    val lat: Double,
+    val lon: Double,
+)
+
+/**
+ * Bus sostitutivi serali (lavori sulla linea): partono dal capolinea a orari
+ * noti, ma gli orari di passaggio alle altre fermate NON sono pubblicati.
+ */
+data class ReplacementBuses(
+    /** In quali tipi di giornata ci sono (oggi solo feriali). */
+    val days: Set<DayType>,
+    /** Per direzione: minuti di partenza dal capolinea, nella giornata di servizio. */
+    val departures: Map<Direction, List<Int>>,
+    val stops: List<BusStop>,
+)
+
+/** Un bus sostitutivo che riguarda una stazione: parte dal capolinea a [departure]. */
+data class BusPass(
+    /** Partenza dal capolinea (l'unico orario pubblicato). */
+    val departure: LocalDateTime,
+    /** true = la stazione È il capolinea di partenza: qui l'orario è esatto. */
+    val atTerminus: Boolean,
+    /**
+     * Fino a quando ha senso mostrarlo in questa stazione: al capolinea fino alla
+     * partenza; altrove una stima larga (partenza + minuti del treno × 1,5 + 10)
+     * che serve solo a toglierlo, e non si mostra mai.
+     */
+    val visibleUntil: LocalDateTime,
+    /** Ordine rispetto ai treni: quando passerebbe un treno partito alla stessa ora. */
+    val sortTime: LocalDateTime,
+)
+
+/**
  * L'orario completo, già validato e pronto all'uso.
  * Si ottiene da [ScheduleParser.parse].
  */
@@ -58,4 +100,6 @@ data class Timetable(
     /** Per ogni tipo di giornata e direzione: tutte le corse (regolari + aggiuntive). */
     val trips: Map<DayType, Map<Direction, List<Trip>>>,
     val holidays: Set<LocalDate>,
+    /** Bus sostitutivi serali; null = non ce ne sono. */
+    val buses: ReplacementBuses? = null,
 )

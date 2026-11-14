@@ -9,6 +9,8 @@ import io.github.edoppiap.orarilido.data.PrimaryMode
 import io.github.edoppiap.orarilido.data.TravelMode
 import io.github.edoppiap.orarilido.location.Geo
 import io.github.edoppiap.orarilido.location.GeoPoint
+import io.github.edoppiap.orarilido.schedule.BusPass
+import io.github.edoppiap.orarilido.schedule.BusStop
 import io.github.edoppiap.orarilido.schedule.Departure
 import io.github.edoppiap.orarilido.schedule.DayType
 import io.github.edoppiap.orarilido.schedule.Direction
@@ -79,6 +81,17 @@ data class MainUiState(
     val settings: AppSettings = AppSettings(),
     /** Es. "9 novembre 2026", per la pagina Impostazioni. */
     val validFromLong: String = "",
+    /** Fermate dei bus sostitutivi, sempre sulla mappa da vicino (mai in Go). */
+    val busStops: List<BusStopUi> = emptyList(),
+)
+
+/** Una fermata del bus sostitutivo sulla mappa; il tocco mostra [title] e [detail]. */
+data class BusStopUi(
+    val point: GeoPoint,
+    val title: String,   // "Bus sostitutivo verso Ostia"
+    val detail: String,  // "Romagnoli/Staz.ne Acilia · lun–ven, parte 23:00 da Porta San Paolo"
+    /** "→ Ostia" / "→ Roma" accanto al cartello; null se la fermata serve entrambi i versi. */
+    val dirTag: String?,
 )
 
 /** Il percorso da disegnare sulla mappa: punti (da te alla stazione) e "12 min". */
@@ -134,17 +147,24 @@ data class DirectionBlock(
     val title: String,       // "Verso Roma"
     val terminus: String,    // "Porta San Paolo"
     val rows: List<DepartureRow>,
+    /**
+     * Finiti treni e bus della giornata: "primo treno 05:36" (sotto a
+     * "Nessun treno fino a domani"). null = ci sono ancora passaggi.
+     */
+    val firstTomorrow: String? = null,
 )
 
 /** Una riga: "tra 4 min · 08:17". */
 data class DepartureRow(
-    val wait: String,        // "4", "ora", "1 h 05"
+    val wait: String,        // "4", "ora", "1 h 05", oppure "Bus"
     val waitUnit: String,    // "min" oppure "" (per "ora" e per le ore)
-    val clock: String,       // "08:17" oppure "domani 05:15"
+    val clock: String,       // "08:17", oppure per il bus "parte 23:00" / "23:00 · bus"
     val unconfirmed: Boolean,
     val imminent: Boolean,   // entro 3 minuti: colore corallo
     /** Non fai in tempo ad arrivare in stazione (Impostazioni → treni sbiaditi). */
     val missed: Boolean = false,
+    /** Bus sostitutivo (non un treno): la UI mette il cartello del bus davanti. */
+    val bus: Boolean = false,
 )
 
 /**
@@ -238,7 +258,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 LineTrack(LineTrack.parsePoints(app.assets.open("line.json").bufferedReader().use { it.readText() }), p.stations)
             }
             this@MainViewModel.track = track
-            detector = GoDetector(track, p.stations, p::minutesFromTerminus)
+            detector = GoDetector(track, p.stations, p::minutesFromTerminus) { index, direction, time ->
+                // In simulazione il viaggio è finto: si accetta a qualunque ora.
+                simulation != null || p.trainPossible(p.stations[index].id, direction, time)
+            }
 
             // La rete di strade per il percorso suggerito (~0,7 MB): ancora dopo,
             // e su un altro thread. Il percorso compare quando è pronta.
@@ -330,6 +353,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             route = route,
             settings = settings,
             validFromLong = p.validFrom.format(DATE_LONG),
+            busStops = busStopsUi(p),
         )
         if (dayRequest != null) buildDay()  // aggiorna anche "passati / prossimo" nella giornata
     }
@@ -591,31 +615,66 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val p = provider ?: return
         val req = dayRequest ?: return
         val now = now().truncatedTo(ChronoUnit.MINUTES)
-        val departures = p.departuresForDay(req.stationId, req.direction, req.date)
-        // Il "prossimo treno" ha senso solo per la giornata in corso.
-        val next = if (req.date == serviceToday()) departures.firstOrNull { !it.time.isBefore(now) } else null
+        val buses = p.busesForDay(req.stationId, req.direction, req.date)
+        // Al capolinea il bus ha un orario esatto: sta in tabella come i treni.
+        val departures = (p.departuresForDay(req.stationId, req.direction, req.date).map { it to false } +
+            buses.filter { it.atTerminus }.map { Departure(it.departure) to true })
+            .sortedBy { it.first.time }
+        // Il "prossimo" ha senso solo per la giornata in corso.
+        val today = serviceToday()
+        val next = if (req.date == today) departures.firstOrNull { !it.first.time.isBefore(now) } else null
 
         // Raggruppa per ora "di servizio": le corse dopo mezzanotte (ora 24)
         // finiscono in fondo, etichettate "00".
         val start = req.date.atStartOfDay()
         val hours = departures
-            .groupBy { Duration.between(start, it.time).toHours() }
+            .groupBy { Duration.between(start, it.first.time).toHours() }
             .toSortedMap()
             .map { (hour, list) ->
                 HourRow(
                     label = "%02d".format(hour % 24),
-                    cells = list.map { d ->
+                    cells = list.map { (d, isBus) ->
                         MinuteCell(
                             text = "%02d".format(d.time.minute),
                             unconfirmed = d.unconfirmed,
                             past = d.time.isBefore(now),
-                            next = d == next,
+                            next = next?.first == d,
+                            bus = isBus,
                         )
                     },
                 )
             }
 
-        val today = serviceToday()
+        // Riga in fondo: il bus che parte dall'altro capolinea (qui il passaggio non è
+        // pubblicato), oppure "niente bus qui" nelle stazioni dove non ferma (Acilia Sud).
+        val origin = if (req.direction == Direction.TO_OSTIA) p.stations.first() else p.stations.last()
+        val busNote = when {
+            buses.any { it.atTerminus } -> null
+            buses.isNotEmpty() -> {
+                val b = buses.first()
+                BusNote(
+                    title = "Bus sostitutivo",
+                    text = "Parte da ${origin.name} alle ${b.departure.format(TIME)}. " +
+                        "L'orario di passaggio qui non è pubblicato.",
+                    past = req.date.isBefore(today) || (req.date == today && now.isAfter(b.visibleUntil)),
+                )
+            }
+            p.hasBuses(p.dayTypeOf(req.date)) && p.busStop(req.stationId, req.direction) == null -> {
+                val here = p.stations.first { it.id == req.stationId }
+                val nearest = p.busStops.filter { it.direction == req.direction }
+                    .minByOrNull { Geo.distanceMeters(GeoPoint(it.lat, it.lon), here) }
+                BusNote(
+                    title = "Niente bus sostitutivo qui",
+                    text = nearest?.let { s ->
+                        val st = p.stations.first { it.id == s.stationId }
+                        "La fermata più vicina è a ${st.name} (${Geo.formatDistance(Geo.distanceMeters(GeoPoint(here.lat, here.lon), st))})."
+                    } ?: "",
+                    past = false,
+                )
+            }
+            else -> null
+        }
+
         _day.value = DayUi(
             stationName = p.stations.first { it.id == req.stationId }.name,
             relativeDay = when (req.date) {
@@ -637,6 +696,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             selectedDirection = req.direction,
             hours = hours,
             nextHourIndex = hours.indexOfFirst { h -> h.cells.any { it.next } }.coerceAtLeast(0),
+            busNote = busNote,
         )
     }
 
@@ -658,15 +718,96 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         distance = userLocation?.let { Geo.formatDistance(Geo.distanceMeters(it, station)) },
         blocks = DIRECTIONS
             .filter { p.servesDirection(station.id, it.direction) }  // ai capolinea una sola direzione
-            .map { d ->
-                DirectionBlock(
-                    direction = d.direction,
-                    title = d.title,
-                    terminus = d.terminus,
-                    rows = p.nextDepartures(station.id, d.direction, now, ROWS_PER_DIRECTION)
-                        .map { toRow(it, now, reach) },
+            .map { d -> buildBlock(p, station, d, now, reach) }
+        )
+    }
+
+    /**
+     * La riga di una direzione: i prossimi treni della giornata di servizio in
+     * corso e, la sera, il bus sostitutivo dopo l'ultimo treno. I treni del
+     * giorno dopo NON si mostrano (dalle 3 di notte sì: è il giorno nuovo):
+     * se mancano, le caselle restano vuote; se non c'è più niente, neanche
+     * il bus, c'è "Nessun treno fino a domani · primo treno 05:36".
+     */
+    private fun buildBlock(
+        p: ScheduleProvider, station: Station, d: DirectionInfo, now: LocalDateTime, reach: Long?,
+    ): DirectionBlock {
+        // Fine della giornata di servizio in corso: le 3 di notte.
+        val serviceEnd = (if (now.hour < 3) now.toLocalDate() else now.toLocalDate().plusDays(1)).atTime(3, 0)
+        val all = p.nextDepartures(station.id, d.direction, now, ROWS_PER_DIRECTION)
+        val trains = all.filter { it.time.isBefore(serviceEnd) }.map { it.time to toRow(it, now, reach) }
+        val bus = p.nextBus(station.id, d.direction, now)
+            ?.takeIf { it.departure.isBefore(serviceEnd) }
+            ?.let { it.sortTime to busRow(it, now) }
+        val rows = (trains + listOfNotNull(bus)).sortedBy { it.first }.take(ROWS_PER_DIRECTION).map { it.second }
+        return DirectionBlock(
+            direction = d.direction,
+            title = d.title,
+            terminus = d.terminus,
+            rows = rows,
+            firstTomorrow = if (rows.isEmpty()) all.firstOrNull()?.let { "primo treno " + it.time.format(TIME) } else null,
+        )
+    }
+
+    /** Le fermate dei bus per la mappa: non cambiano mai, si preparano una volta sola. */
+    private var busStopsCache: List<BusStopUi>? = null
+
+    private fun busStopsUi(p: ScheduleProvider): List<BusStopUi> = busStopsCache ?: run {
+        // Orari di partenza dal capolinea, presi dal primo giorno con i bus.
+        val busDay = (0L..7L).map { p.validFrom.plusDays(it) }.firstOrNull { p.hasBuses(p.dayTypeOf(it)) }
+        val days = DayType.entries.filter { p.hasBuses(it) }.joinToString(", ") {
+            when (it) { DayType.WEEKDAY -> "lun–ven"; DayType.SATURDAY -> "sabato"; DayType.HOLIDAY -> "festivi" }
+        }
+        /** "parte 23:00 da Porta San Paolo" per una fermata e il suo verso. */
+        fun departs(s: BusStop): String? {
+            val origin = if (s.direction == Direction.TO_OSTIA) p.stations.first() else p.stations.last()
+            val times = busDay?.let { day -> p.busesForDay(s.stationId, s.direction, day).joinToString(", ") { it.departure.format(TIME) } }
+            return if (times.isNullOrEmpty()) null else "parte $times da ${origin.name}"
+        }
+        fun towards(dir: Direction) = if (dir == Direction.TO_OSTIA) "Ostia" else "Roma"
+        // Una palina usata nei due versi (Castel Fusano, Lido Centro) è UN solo cartello,
+        // senza freccia, che dice entrambe le partenze.
+        p.busStops.groupBy { it.stationId to it.code }.values.map { group ->
+            val s = group.first()
+            if (group.size == 1) {
+                BusStopUi(
+                    point = GeoPoint(s.lat, s.lon),
+                    title = "Bus sostitutivo verso " + towards(s.direction),
+                    detail = s.name + (departs(s)?.let { " · $days, $it" } ?: ""),
+                    dirTag = "→ " + towards(s.direction),
                 )
-            },
+            } else {
+                // Prima Ostia poi Roma, come nei selettori.
+                val parts = group.sortedBy { it.direction != Direction.TO_OSTIA }
+                    .mapNotNull { g -> departs(g)?.let { "verso ${towards(g.direction)} $it" } }
+                BusStopUi(
+                    point = GeoPoint(s.lat, s.lon),
+                    title = "Bus sostitutivo, entrambi i versi",
+                    detail = s.name + if (parts.isEmpty()) "" else " · $days: " + parts.joinToString("; "),
+                    dirTag = null,
+                )
+            }
+        }.also { busStopsCache = it }
+    }
+
+    /**
+     * Il bus sostitutivo nella riga. Al capolinea l'orario è esatto: "20 min ·
+     * 23:00 · bus". Altrove il passaggio non è pubblicato: "Bus · parte 23:00"
+     * (dal capolinea), poi "partito 23:00".
+     */
+    private fun busRow(bus: BusPass, now: LocalDateTime): DepartureRow {
+        val clock = bus.departure.format(TIME)
+        if (bus.atTerminus) {
+            return toRow(Departure(bus.departure), now).copy(clock = "$clock · bus", bus = true)
+        }
+        val departed = now.truncatedTo(ChronoUnit.MINUTES).isAfter(bus.departure)
+        return DepartureRow(
+            wait = "Bus",
+            waitUnit = "",
+            clock = (if (departed) "partito " else "parte ") + clock,
+            unconfirmed = false,
+            imminent = false,
+            bus = true,
         )
     }
 

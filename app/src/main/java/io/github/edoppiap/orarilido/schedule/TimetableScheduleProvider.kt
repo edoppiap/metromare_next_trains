@@ -4,6 +4,7 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit
+import kotlin.math.roundToLong
 
 /**
  * Calcola i prossimi passaggi a partire da un [Timetable] (orari programmati).
@@ -83,6 +84,60 @@ class TimetableScheduleProvider(private val timetable: Timetable) : ScheduleProv
         else -> DayType.WEEKDAY
     }
 
+    // ---- Bus sostitutivi ----
+
+    override val busStops: List<BusStop> get() = timetable.buses?.stops.orEmpty()
+
+    private val stopByKey: Map<Pair<String, Direction>, BusStop> =
+        busStops.associateBy { it.stationId to it.direction }
+
+    override fun busStop(stationId: String, direction: Direction): BusStop? = stopByKey[stationId to direction]
+
+    override fun hasBuses(dayType: DayType): Boolean = timetable.buses?.days?.contains(dayType) == true
+
+    override fun busesForDay(stationId: String, direction: Direction, serviceDate: LocalDate): List<BusPass> {
+        val buses = timetable.buses ?: return emptyList()
+        if (dayTypeOf(serviceDate) !in buses.days || busStop(stationId, direction) == null) return emptyList()
+        val minutes = timetable.minutesFromTerminus.getValue(direction)[indexOf(stationId)]
+        val start = serviceDate.atStartOfDay()
+        return buses.departures.getValue(direction).map { dep ->
+            val departure = start.plusMinutes(dep.toLong())
+            val atTerminus = minutes == 0
+            BusPass(
+                departure = departure,
+                atTerminus = atTerminus,
+                // Gli orari di passaggio non sono pubblicati: stima larga, solo per sapere
+                // quando toglierlo (il bus è più lento del treno e si ferma ai semafori).
+                visibleUntil = if (atTerminus) departure
+                    else departure.plusMinutes((minutes * BUS_SLOWNESS).roundToLong() + BUS_MARGIN_MIN),
+                sortTime = departure.plusMinutes(minutes.toLong()),
+            )
+        }
+    }
+
+    override fun nextBus(stationId: String, direction: Direction, now: LocalDateTime): BusPass? {
+        val from = now.truncatedTo(ChronoUnit.MINUTES)
+        // Ieri (un bus delle 23:45 si vede ancora dopo mezzanotte) e oggi.
+        return (-1L..0L)
+            .flatMap { busesForDay(stationId, direction, from.toLocalDate().plusDays(it)) }
+            .filter { !it.visibleUntil.isBefore(from) }
+            .minByOrNull { it.departure }
+    }
+
+    override fun trainPossible(stationId: String, direction: Direction, now: LocalDateTime): Boolean {
+        if (!servesDirection(stationId, direction)) {
+            // Capolinea d'arrivo: conta il treno che ci arriva, cioè quello della stazione prima.
+            val i = indexOf(stationId)
+            val before = if (direction == Direction.TO_OSTIA) i - 1 else i + 1
+            return trainPossible(timetable.stations[before].id, direction, now)
+        }
+        val from = now.minusMinutes(TRAIN_PASSED_MIN)
+        val to = now.plusMinutes(TRAIN_COMING_MIN)
+        return (-1L..1L)
+            .flatMap { departuresForDay(stationId, direction, now.toLocalDate().plusDays(it)) }
+            .any { !it.time.isBefore(from) && !it.time.isAfter(to) }
+    }
+
     /**
      * Una corsa passa da una stazione se la stazione è sulla sua strada,
      * cioè dall'origine in poi nel verso di marcia. Serve per le corse
@@ -96,4 +151,15 @@ class TimetableScheduleProvider(private val timetable: Timetable) : ScheduleProv
 
     private fun indexOf(stationId: String): Int =
         indexById[stationId] ?: throw IllegalArgumentException("Stazione sconosciuta: $stationId")
+
+    private companion object {
+        /** Il bus ci mette al massimo una volta e mezza il treno... */
+        const val BUS_SLOWNESS = 1.5
+        /** ...più 10 minuti di margine. */
+        const val BUS_MARGIN_MIN = 10L
+        /** Go: un treno passato da meno di tanto può essere quello su cui sei (in ritardo). */
+        const val TRAIN_PASSED_MIN = 10L
+        /** Go: un treno in arrivo entro tanto può essere già lì (gli intervalli arrivano a 30 min). */
+        const val TRAIN_COMING_MIN = 20L
+    }
 }

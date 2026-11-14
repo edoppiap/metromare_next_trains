@@ -61,6 +61,12 @@ class GoDetector(
     private val stations: List<Station>,
     /** Minuti dal capolinea per stazione, per direzione (dall'orario). */
     private val minutesFromTerminus: (Direction) -> IntArray,
+    /**
+     * Può esserci un treno lì, a quell'ora? (indice della stazione più vicina,
+     * verso, ora). La sera, passato l'ultimo treno, la strada che corre accanto
+     * ai binari sembrerebbe un treno: così sul bus sostitutivo Go non parte.
+     */
+    private val trainPossible: (Int, Direction, LocalDateTime) -> Boolean = { _, _, _ -> true },
 ) {
     var state: GoState = GoState.Off
         private set
@@ -104,7 +110,9 @@ class GoDetector(
         val trainStep = fix.projection.offsetMeters <= ON_LINE_M &&
             previous.projection.offsetMeters <= ON_LINE_M &&
             alongSpeed in MIN_TRAIN_SPEED_MPS..MAX_TRAIN_SPEED_MPS &&
-            abs(dAlong) >= PARALLEL_RATIO * straight
+            abs(dAlong) >= PARALLEL_RATIO * straight &&
+            // Si chiede all'orario solo per i passi che sembrano da treno.
+            trainPossible(nearestStation(fix.projection.alongMeters), direction, sample.time)
 
         when (state) {
             is GoState.OnTrain -> updateOnTrain(fix, alongSpeed)
@@ -175,6 +183,10 @@ class GoDetector(
         val along = if (forward < 0) current.alongMeters else fix.projection.alongMeters
         state = onTrain(time, along, current.direction)
     }
+
+    /** Indice della stazione più vicina al punto [along] della linea. */
+    private fun nearestStation(along: Double): Int =
+        track.stationAlong.indices.minBy { abs(track.stationAlong[it] - along) }
 
     private fun isNearArrivalTerminus(fix: Fix, direction: Direction): Boolean {
         val terminus = if (direction == Direction.TO_OSTIA) track.stationAlong.last() else track.stationAlong.first()

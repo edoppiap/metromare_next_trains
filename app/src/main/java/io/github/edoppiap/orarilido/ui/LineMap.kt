@@ -74,6 +74,8 @@ import com.google.android.gms.maps.model.Dot
 import com.google.android.gms.maps.model.Gap
 import com.google.android.gms.maps.model.RoundCap
 import io.github.edoppiap.orarilido.ui.theme.CardDark
+import io.github.edoppiap.orarilido.ui.theme.BackgroundDark
+import androidx.compose.foundation.layout.widthIn
 import io.github.edoppiap.orarilido.ui.theme.Ink
 import io.github.edoppiap.orarilido.ui.theme.InkDark
 import io.github.edoppiap.orarilido.schedule.Station
@@ -135,6 +137,14 @@ fun LineMap(
     showPlaces: Boolean = false,
     /** Categorie di punti di interesse scelte nelle Impostazioni. */
     placeKinds: Set<io.github.edoppiap.orarilido.places.PlaceKind> = io.github.edoppiap.orarilido.places.PlaceKind.entries.toSet(),
+    /**
+     * Fermate dei bus sostitutivi: si vedono SEMPRE da vicino (zoom 15), a
+     * qualunque ora e altezza della tendina, senza interruttori (deciso
+     * dall'utente: sono utili e ricordano che il servizio ha ancora problemi).
+     */
+    busStops: List<BusStopUi> = emptyList(),
+    /** false in modalità Go: lì la mappa mostra solo il viaggio. */
+    showBusStops: Boolean = true,
     onUserClick: () -> Unit,
     bottomPadding: androidx.compose.ui.unit.Dp,
     /**
@@ -348,6 +358,28 @@ fun LineMap(
         if (tappedPlace != null) {
             delay(NAME_REVEAL_MS)
             tappedPlace = null
+        }
+    }
+
+    // ---- Fermate dei bus sostitutivi ----
+    // Stessa soglia di zoom dei punti di interesse, ma non contano nel loro limite
+    // e non dipendono dal loro interruttore. Sono al massimo 24.
+    val busOn = showBusStops && placesZoomOk && busStops.isNotEmpty()
+    val busAlpha by animateFloatAsState(if (busOn) 1f else 0f, tween(400), label = "busStops")
+    val busBigZoom by remember { derivedStateOf { cameraState.position.zoom >= BUS_BIG_ZOOM } }
+    // 0 = cartello piccolo, 1 = grande con "→ Ostia": si passa in dissolvenza.
+    val busBig by animateFloatAsState(if (busBigZoom) 1f else 0f, tween(300), label = "busBig")
+    var tappedBus by remember { mutableStateOf<BusStopUi?>(null) }
+    var lastTappedBus by remember { mutableStateOf<BusStopUi?>(null) }
+    val tappedBusAlpha by animateFloatAsState(
+        if (tappedBus != null && busOn) 1f else 0f,
+        tween(if (tappedBus != null) 200 else 600),
+        label = "tappedBus",
+    )
+    LaunchedEffect(tappedBus) {
+        if (tappedBus != null) {
+            delay(NAME_REVEAL_MS)
+            tappedBus = null
         }
     }
 
@@ -568,6 +600,83 @@ fun LineMap(
                     }
                 }
             }
+            // Fermate dei bus sostitutivi: cartello blu col bus (bitmap, uno solo per giorno/notte).
+            if (busAlpha > 0.01f) {
+                // Due misure: piccolo (zoom 15–17, dove arrivano anche le inquadrature
+                // automatiche: si vede che c'è, senza ingombrare) e grande con "→ Ostia"
+                // da zoom 17, dove arrivi solo allargando con le dita.
+                fun badge(sizeDp: Float) = BitmapDescriptorFactory.fromBitmap(
+                    busBadgeBitmap(
+                        sizeDp = sizeDp,
+                        density = density.density,
+                        bg = (if (night) BlueDark else Blue).toArgb(),
+                        fg = (if (night) BackgroundDark else Card).toArgb(),
+                        border = (if (night) CardDark else Card).toArgb(),
+                    )
+                )
+                val smallIcon = remember(dark) { badge(BUS_SMALL_DP) }
+                val bigIcon = remember(dark) { badge(BUS_BIG_DP) }
+                val smallAlpha = busAlpha * (1f - busBig)
+                val bigAlpha = busAlpha * busBig
+                busStops.forEach { stop ->
+                    key(stop) {
+                        val onTap = {
+                            tappedBus = stop
+                            lastTappedBus = stop
+                            true  // niente fumetto e niente centratura di Google
+                        }
+                        // Si disegna solo la misura visibile (un marker trasparente ruberebbe i tocchi).
+                        if (smallAlpha > 0.01f) Marker(
+                            state = rememberUpdatedMarkerState(LatLng(stop.point.lat, stop.point.lon)),
+                            icon = smallIcon,
+                            anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
+                            alpha = smallAlpha,
+                            zIndex = 0.6f,  // sopra i punti di interesse, sotto stazioni e pallino
+                            onClick = { onTap() },
+                        )
+                        if (bigAlpha > 0.01f) Marker(
+                            state = rememberUpdatedMarkerState(LatLng(stop.point.lat, stop.point.lon)),
+                            icon = bigIcon,
+                            anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
+                            alpha = bigAlpha,
+                            zIndex = 0.6f,
+                            onClick = { onTap() },
+                        )
+                        // "→ Ostia" accanto al cartello grande: il bordo sinistro sta sul cartello,
+                        // il testo parte più a destra (padding), così non lo copre.
+                        if (bigAlpha > 0.01f) stop.dirTag?.let { tag ->
+                            MarkerComposable(
+                                keys = arrayOf<Any>("busTag", stop, dark),
+                                state = rememberUpdatedMarkerState(LatLng(stop.point.lat, stop.point.lon)),
+                                anchor = androidx.compose.ui.geometry.Offset(0f, 0.5f),
+                                alpha = bigAlpha,
+                                zIndex = 0.55f,
+                                onClick = {
+                                    tappedBus = stop
+                                    lastTappedBus = stop
+                                    true
+                                },
+                            ) {
+                                BusDirTag(tag, night)
+                            }
+                        }
+                    }
+                }
+                val tb = lastTappedBus
+                if (tb != null && tappedBusAlpha > 0.01f) {
+                    MarkerComposable(
+                        keys = arrayOf<Any>("bus", tb, dark),
+                        state = rememberUpdatedMarkerState(LatLng(tb.point.lat, tb.point.lon)),
+                        // Sopra il cartello: un po' più su quando è grande.
+                        anchor = androidx.compose.ui.geometry.Offset(0.5f, 1.3f + 0.15f * busBig),
+                        zIndex = 2.8f,
+                        alpha = tappedBusAlpha * busAlpha,
+                        onClick = { true },
+                    ) {
+                        BusStopLabel(tb, night)
+                    }
+                }
+            }
             // Percorso suggerito: puntini grigi (non è un binario), sotto stazioni e pallino.
             val f = if (routeKey != null && routeKey != animatedRouteKey) 0f else drawn.value
             if (shownRoute != null && f > 0.001f && shownRoute.points.size >= 2) {
@@ -778,6 +887,14 @@ private fun placeIcon(kind: PlaceKind, night: Boolean, density: Float): BitmapDe
 
 /** Da questo zoom in su compaiono i punti di interesse (15 ≈ isolato). */
 private const val PLACES_MIN_ZOOM = 15f
+/**
+ * Fermate dei bus: da questo zoom il cartello è grande e ha "→ Ostia". Le
+ * inquadrature automatiche arrivano al massimo a 16 (MAX_ZOOM): a 17 ci arrivi
+ * solo allargando con le dita, cioè quando stai cercando dove salire.
+ */
+private const val BUS_BIG_ZOOM = 17f
+private const val BUS_SMALL_DP = 14f
+private const val BUS_BIG_DP = 24f
 /** Al massimo tanti punti di interesse disegnati insieme (i più vicini al centro). */
 private const val PLACES_MAX = 150
 
@@ -915,6 +1032,40 @@ private fun StationName(name: String, selected: Boolean, night: Boolean, startPa
         fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.SemiBold,
         color = if (night) InkDark else Ink,
     )
+}
+
+/** "→ Ostia" / "→ Roma" accanto al cartello del bus, su fondino arrotondato. */
+@Composable
+private fun BusDirTag(text: String, night: Boolean) {
+    androidx.compose.material3.Text(
+        text,
+        modifier = Modifier
+            .padding(start = 15.dp)  // metà cartello (12 dp) + un po' d'aria
+            .background(if (night) CardDark else Card, androidx.compose.foundation.shape.RoundedCornerShape(50))
+            .padding(horizontal = 6.dp, vertical = 1.dp),
+        fontSize = 11.sp,
+        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+        color = if (night) GreyDark else Grey,
+    )
+}
+
+/** Etichetta della fermata del bus toccata: "Bus sostitutivo verso Ostia" + palina e orari. */
+@Composable
+private fun BusStopLabel(stop: BusStopUi, night: Boolean) {
+    androidx.compose.foundation.layout.Column(
+        Modifier
+            .widthIn(max = 230.dp)
+            .background(if (night) CardDark else Card, androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    ) {
+        androidx.compose.material3.Text(
+            stop.title,
+            fontSize = 12.sp,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+            color = if (night) InkDark else Ink,
+        )
+        androidx.compose.material3.Text(stop.detail, fontSize = 11.sp, color = if (night) GreyDark else Grey)
+    }
 }
 
 /**

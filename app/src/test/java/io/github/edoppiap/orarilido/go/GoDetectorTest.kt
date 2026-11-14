@@ -110,6 +110,32 @@ class GoDetectorTest {
 
     // --- Riconoscimento ---------------------------------------------------
 
+    /** Riconoscitore come nell'app: chiede all'orario se a quell'ora un treno può essere lì. */
+    private fun detectorWithSchedule() = GoDetector(track, stations, provider::minutesFromTerminus) { i, dir, time ->
+        provider.trainPossible(stations[i].id, dir, time)
+    }
+
+    @Test
+    fun `di sera sul bus sostitutivo - Go non parte`() {
+        // Feriale, 23:20: l'ultimo treno è passato da Vitinia alle 22:43 verso Ostia.
+        // Un mezzo che va "come un treno" lungo i binari è il bus (o un treno MOLTO in ritardo).
+        val states = detectorWithSchedule().feed(trainRide("vitinia", "lido_centro", LocalDateTime.of(2026, 11, 16, 23, 20)))
+        assertTrue(states.none { it is GoState.OnTrain || it is GoState.Detecting })
+    }
+
+    @Test
+    fun `stesso viaggio di giorno, col controllo dell'orario - Go parte`() {
+        val states = detectorWithSchedule().feed(trainRide("vitinia", "lido_centro", morning))
+        assertTrue(states.any { it is GoState.OnTrain })
+    }
+
+    @Test
+    fun `ultimo treno appena in ritardo - Go parte`() {
+        // L'ultimo treno feriale verso Ostia passa da Vitinia alle 22:43: 5 minuti dopo è ancora lui.
+        val states = detectorWithSchedule().feed(trainRide("vitinia", "lido_centro", LocalDateTime.of(2026, 11, 16, 22, 48)))
+        assertTrue(states.any { it is GoState.OnTrain })
+    }
+
     @Test
     fun `sul treno verso Ostia - riconosciuto in meno di 30 secondi`() {
         val d = newDetector()

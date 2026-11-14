@@ -97,7 +97,32 @@ object ScheduleParser {
             minutesFromTerminus = minutes,
             trips = trips,
             holidays = raw.holidays.map { parseDate(it, "holidays") }.toSet(),
+            buses = raw.replacementBuses?.let { parseBuses(it, indexById) },
         )
+    }
+
+    /** Bus sostitutivi: giorni, partenze dai capolinea e fermate (una per stazione e verso). */
+    private fun parseBuses(raw: BusesJson, indexById: Map<String, Int>): ReplacementBuses {
+        val days = raw.days.map { key ->
+            DayType.entries.firstOrNull { it.jsonKey == key } ?: fail("bus: tipo di giorno sconosciuto: $key")
+        }.toSet()
+        check(days.isNotEmpty()) { "bus: nessun giorno" }
+        val departures = Direction.entries.associateWith { dir ->
+            val list = raw.departures[dir.jsonKey].orEmpty().map { parseTime(it) }
+            check(list.zipWithNext().all { (a, b) -> b > a }) { "bus: orari non in ordine (${dir.jsonKey})" }
+            list
+        }
+        val stops = raw.stops.map { s ->
+            val dir = Direction.entries.firstOrNull { it.jsonKey == s.direction }
+                ?: fail("bus: direzione sconosciuta: ${s.direction}")
+            check(s.station in indexById) { "bus: stazione sconosciuta: ${s.station}" }
+            check(s.lat in -90.0..90.0 && s.lon in -180.0..180.0) { "bus: coordinate non valide (${s.code})" }
+            BusStop(s.station, dir, s.code, s.name, s.lat, s.lon)
+        }
+        check(stops.map { it.stationId to it.direction }.toSet().size == stops.size) {
+            "bus: due fermate per la stessa stazione e verso"
+        }
+        return ReplacementBuses(days, departures, stops)
     }
 
     /** "HH:MM" → minuti dalla mezzanotte. Ammesse ore oltre 23 (es. "24:10") per le corse notturne. */
@@ -139,6 +164,25 @@ private data class ScheduleJson(
     val departures: Map<String, Map<String, List<String>>>,
     val extraTrips: List<ExtraTripJson> = emptyList(),
     val holidays: List<String> = emptyList(),
+    val replacementBuses: BusesJson? = null,
+)
+
+@Serializable
+private data class BusesJson(
+    val days: List<String>,
+    /** direzione → orari "HH:MM" di partenza dal capolinea */
+    val departures: Map<String, List<String>>,
+    val stops: List<BusStopJson>,
+)
+
+@Serializable
+private data class BusStopJson(
+    val station: String,
+    val direction: String,
+    val code: String,
+    val name: String,
+    val lat: Double,
+    val lon: Double,
 )
 
 @Serializable

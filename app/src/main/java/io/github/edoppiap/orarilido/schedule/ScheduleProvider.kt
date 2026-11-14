@@ -50,4 +50,27 @@ interface ScheduleProvider {
 
     /** Feriale, sabato o festivo: quale tabella vale in quella data. */
     fun dayTypeOf(date: LocalDate): DayType
+
+    /** Tutte le fermate dei bus sostitutivi (vuota = niente bus). */
+    val busStops: List<BusStop>
+
+    /** La fermata del bus sostitutivo di una stazione in un verso (null = il bus non ferma qui). */
+    fun busStop(stationId: String, direction: Direction): BusStop?
+
+    /** true se in quel tipo di giornata ci sono bus sostitutivi. */
+    fun hasBuses(dayType: DayType): Boolean
+
+    /** I bus sostitutivi della giornata [serviceDate] che fermano a [stationId] in [direction]. */
+    fun busesForDay(stationId: String, direction: Direction, serviceDate: LocalDate): List<BusPass>
+
+    /** Il prossimo bus sostitutivo ancora da mostrare a [now] (null = nessuno). */
+    fun nextBus(stationId: String, direction: Direction, now: LocalDateTime): BusPass?
+
+    /**
+     * Modalità Go: può esserci un treno in [direction] vicino a [stationId] adesso?
+     * Sì se lì ne è passato uno negli ultimi 10 minuti o ne arriva uno entro 20
+     * (l'intervallo più lungo dell'orario è di 30 minuti, quindi di giorno è sempre sì).
+     * Dopo l'ultimo treno della sera, passati 10 minuti, è no: sei sul bus.
+     */
+    fun trainPossible(stationId: String, direction: Direction, now: LocalDateTime): Boolean
 }

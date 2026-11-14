@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 enum class InfoPage(val title: String) {
     MENU("Menu"),
     SETTINGS("Impostazioni"),
+    BUSES("Bus sostitutivi"),
     STORY("La storia di questa app"),
     PRIVACY("Privacy"),
     TERMS("Termini d'uso"),
@@ -52,8 +53,10 @@ fun InfoScreen(
     debugActions: List<Pair<String, () -> Unit>> = emptyList(),
     /** Contenuto della pagina Impostazioni (lo fornisce MainActivity, che ha il ViewModel). */
     settingsContent: @Composable () -> Unit = {},
+    /** Pagina aperta da fuori dal menu (es. "Cos'è?" nella giornata): indietro chiude e basta. */
+    standalone: Boolean = false,
 ) {
-    val back = { onNavigate(if (page == InfoPage.MENU) null else InfoPage.MENU) }
+    val back = { onNavigate(if (page == InfoPage.MENU || standalone) null else InfoPage.MENU) }
     BackHandler(onBack = back)
     val colors = MaterialTheme.colorScheme
 
@@ -92,10 +95,52 @@ fun InfoScreen(
                     lineHeight = 22.sp,
                     color = colors.onSurface,
                 )
+                INFO_LINKS[page]?.let { LinksCard(it) }
             }
         }
     }
 }
+
+/** Un link a una pagina esterna: si apre nel browser (lo apri tu: l'app non contatta nessuno). */
+private data class InfoLink(val title: String, val subtitle: String, val url: String)
+
+/** Riquadro coi link, sotto il testo della pagina. */
+@Composable
+private fun LinksCard(links: List<InfoLink>) {
+    val colors = MaterialTheme.colorScheme
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    Spacer(Modifier.height(12.dp))
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(colors.surface),
+    ) {
+        links.forEachIndexed { i, link ->
+            if (i > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.outlineVariant)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { runCatching { uriHandler.openUri(link.url) } }  // senza browser: niente
+                    .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(link.title, fontSize = 16.sp, color = colors.primary, fontWeight = FontWeight.SemiBold)
+                    Text(link.subtitle, fontSize = 13.sp, color = colors.onSurfaceVariant)
+                }
+                Text("↗", fontSize = 18.sp, color = colors.primary)
+            }
+        }
+    }
+}
+
+private val INFO_LINKS = mapOf(
+    InfoPage.BUSES to listOf(
+        InfoLink("Pagina Metromare di Cotral", "Orari dei bus, fermate, avvisi e scioperi", "https://cotralspa.it/metromare/"),
+        InfoLink("Infomobilità Astral", "Avvisi sulla linea", "https://infomobilita.astralspa.it/"),
+    ),
+)
 
 /** Riquadro "Solo build di prova" con le voci del simulatore. */
 @Composable
@@ -135,7 +180,7 @@ private fun MenuList(onNavigate: (InfoPage) -> Unit) {
     // Impostazioni in un riquadro a sé, sopra le pagine informative.
     MenuCard(listOf(InfoPage.SETTINGS), onNavigate)
     Spacer(Modifier.height(12.dp))
-    MenuCard(listOf(InfoPage.STORY, InfoPage.PRIVACY, InfoPage.TERMS, InfoPage.CREDITS), onNavigate)
+    MenuCard(listOf(InfoPage.BUSES, InfoPage.STORY, InfoPage.PRIVACY, InfoPage.TERMS, InfoPage.CREDITS), onNavigate)
 // Versione dell'app, letta dal sistema.
     val context = LocalContext.current
     val version = runCatching {
@@ -237,9 +282,33 @@ private val INFO_TEXTS = mapOf(
         Il codice è distribuito con licenza MIT.
     """.trimIndent(),
 
+    InfoPage.BUSES to """
+        Perché ci sono
+        Sulla Metromare sono in corso lavori notturni di rinnovo della linea. Dal lunedì al venerdì gli ultimi treni partono dai capolinea alle 22:30; dopo, il servizio continua con bus sostitutivi. Sabato, domenica e festivi i treni circolano fino alle 23:30 e i bus non ci sono.
+
+        Orari
+        Dal 2 novembre 2026 le corse sono due:
+        · da Porta San Paolo verso Cristoforo Colombo alle 23:00
+        · da Cristoforo Colombo verso Porta San Paolo alle 23:45
+
+        Fermate
+        Le fermate sono vicino alle stazioni, di solito una per ogni verso. Sulla mappa sono i cartelli blu col bus; avvicinando lo zoom compare anche il verso (→ Ostia, → Roma). Ad Acilia Sud/Dragona il bus non ferma.
+
+        Cosa mostra l'app
+        Cotral pubblica solo l'orario di partenza dai capolinea, non quello di passaggio alle altre fermate. Per questo nelle schede il bus compare come "parte 23:00", poi "partito 23:00", con l'orario del capolinea; il conto alla rovescia c'è solo al capolinea. Il bus resta nella scheda per una stima larga del tempo di viaggio, poi sparisce.
+
+        Informazioni aggiornate al 14 novembre 2026. Orari e fermate possono cambiare: prima di partire conviene controllare le pagine ufficiali.
+    """.trimIndent(),
+
     InfoPage.CREDITS to """
         Orario
         Orario ufficiale Metromare (Roma–Lido) in vigore dal 9 novembre 2026, pubblicato da Astral / Regione Lazio.
+
+        Corse con il punto interrogativo rosso
+        Cotral annuncia tre corse in più da Acilia verso Roma, dal lunedì al venerdì alle 6:10, 7:10 e 8:10, che però non compaiono nel PDF dell'orario ufficiale. L'app le mostra con un punto interrogativo rosso accanto all'orario finché non saranno confermate: potrebbero non esserci.
+
+        Bus sostitutivi serali
+        Orari e fermate dalla pagina Metromare di Cotral (cotralspa.it). Posizione delle fermate dai dati aperti di Roma Servizi per la Mobilità, licenza CC BY 4.0.
 
         Stazioni, tracciato della linea, strade per i percorsi suggeriti e punti di interesse
         © OpenStreetMap contributors, dati disponibili con licenza ODbL (openstreetmap.org/copyright).

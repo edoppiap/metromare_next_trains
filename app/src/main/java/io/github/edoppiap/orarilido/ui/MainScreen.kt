@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -322,6 +323,8 @@ private fun MapLayer(
                 onLineFraming = onLineFraming,
                 showPlaces = showPlaces,
                 placeKinds = state.settings.placeKinds,
+                busStops = state.busStops,
+                showBusStops = state.go == null,
                 onUserClick = onUserClick,
                 onMapGesture = onMapGesture,
                 onStationClick = onStationClick,
@@ -411,21 +414,7 @@ private fun CollapsedStrip(
                 modifier = Modifier.weight(1f),
             ) { b ->
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    if (b.rows.isEmpty()) {
-                        Text("Nessun treno", fontSize = 15.sp, color = colors.onSurfaceVariant)
-                    }
-                    b.rows.forEachIndexed { i, row ->
-                        Column(Modifier.weight(if (i == 0) 1.3f else 1f).alpha(missedAlpha(row))) {
-                            Text(
-                                waitText(row),
-                                fontSize = if (i == 0) 20.sp else 15.sp,
-                                fontWeight = if (i == 0) FontWeight.Bold else FontWeight.SemiBold,
-                                color = if (row.imminent) colors.tertiary else colors.onBackground,
-                                maxLines = 1,
-                            )
-                            Text(clockText(row), fontSize = 12.sp, color = colors.onSurfaceVariant, maxLines = 1)
-                        }
-                    }
+                    DepartureCells(b, bigSize = 20.sp, smallSize = 15.sp, textColor = colors.onBackground)
                 }
             }
         }
@@ -938,26 +927,69 @@ private fun CompactDirectionRow(
             },
         )
         Spacer(Modifier.width(12.dp))
-        block.rows.forEachIndexed { i, row ->
-            Column(Modifier.weight(if (i == 0) 1.3f else 1f).alpha(missedAlpha(row))) {
+        DepartureCells(
+            block,
+            bigSize = lerp(22.sp, 20.sp, p),
+            smallSize = lerp(16.sp, 15.sp, p),
+            textColor = androidx.compose.ui.graphics.lerp(colors.onSurface, colors.onBackground, p),
+        )
+    }
+}
+
+/**
+ * Le tre caselle di una direzione (nella scheda e nella striscia):
+ *   3 min     18 min    [bus] Bus
+ *   08:03     08:18     parte 23:00
+ * Il primo passaggio è più grande; la casella del bus è più larga, così
+ * "partito 23:00" si legge intero. Se mancano passaggi (finiti i treni della
+ * giornata) le caselle restano vuote; se non c'è più niente, neanche il bus:
+ * "Nessun treno fino a domani · primo treno 05:36".
+ */
+@Composable
+private fun RowScope.DepartureCells(
+    block: DirectionBlock,
+    bigSize: androidx.compose.ui.unit.TextUnit,
+    smallSize: androidx.compose.ui.unit.TextUnit,
+    textColor: androidx.compose.ui.graphics.Color,
+) {
+    val colors = MaterialTheme.colorScheme
+    if (block.rows.isEmpty()) {
+        Column(Modifier.weight(CELL_WEIGHTS.sum())) {
+            Text("Nessun treno fino a domani", fontSize = 15.sp, color = colors.onSurfaceVariant, maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            block.firstTomorrow?.let { Text(it, fontSize = 12.sp, color = colors.onSurfaceVariant, maxLines = 1) }
+        }
+        return
+    }
+    CELL_WEIGHTS.forEachIndexed { i, baseWeight ->
+        val row = block.rows.getOrNull(i)
+        if (row == null) {
+            Spacer(Modifier.weight(baseWeight))  // casella vuota: il vuoto dice "per oggi è finita"
+            return@forEachIndexed
+        }
+        Column(Modifier.weight(if (row.bus) BUS_CELL_WEIGHT else baseWeight).alpha(missedAlpha(row))) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (row.bus) {
+                    BusBadge(if (i == 0) 20.dp else 17.dp)
+                    Spacer(Modifier.width(4.dp))
+                }
                 Text(
                     waitText(row),
-                    fontSize = if (i == 0) lerp(22.sp, 20.sp, p) else lerp(16.sp, 15.sp, p),
+                    fontSize = if (i == 0) bigSize else smallSize,
                     fontWeight = if (i == 0) FontWeight.Bold else FontWeight.SemiBold,
-                    color = if (row.imminent) colors.tertiary
-                        else androidx.compose.ui.graphics.lerp(colors.onSurface, colors.onBackground, p),
-                    maxLines = 1,
-                )
-                Text(
-                    clockText(row),
-                    fontSize = 12.sp,
-                    color = colors.onSurfaceVariant,
+                    color = if (row.imminent) colors.tertiary else textColor,
                     maxLines = 1,
                 )
             }
+            Text(clockText(row), fontSize = 12.sp, color = colors.onSurfaceVariant, maxLines = 1)
         }
     }
 }
+
+/** Larghezza delle tre caselle: la prima (più grande) e le altre due. */
+private val CELL_WEIGHTS = listOf(1.3f, 1f, 1f)
+/** La casella del bus: più larga, per "partito 23:00" (misurato ~82 dp sull'S23). */
+private const val BUS_CELL_WEIGHT = 1.6f
 
 /**
  * La pillola della scheda che diventa il selettore della striscia: occupano lo

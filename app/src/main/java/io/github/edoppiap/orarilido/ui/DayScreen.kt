@@ -27,7 +27,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -54,11 +56,23 @@ data class DayUi(
     val hours: List<HourRow>,
     /** Riga dell'ora del prossimo treno, per scorrere subito lì. */
     val nextHourIndex: Int,
+    /** Riga in fondo sul bus sostitutivo (null = nessuna). */
+    val busNote: BusNote? = null,
 )
 
 data class DirectionTab(val direction: Direction, val title: String)
 data class HourRow(val label: String, val cells: List<MinuteCell>)
-data class MinuteCell(val text: String, val unconfirmed: Boolean, val past: Boolean, val next: Boolean)
+data class MinuteCell(
+    val text: String,
+    val unconfirmed: Boolean,
+    val past: Boolean,
+    val next: Boolean,
+    /** Bus sostitutivo al suo capolinea (lì l'orario è esatto): cartello del bus accanto. */
+    val bus: Boolean = false,
+)
+
+/** "Bus sostitutivo · Parte da Porta San Paolo alle 23:00…" in fondo alla giornata. */
+data class BusNote(val title: String, val text: String, val past: Boolean)
 
 /**
  * Orari di tutta la giornata per una stazione, nello stile dei cartelli
@@ -71,6 +85,8 @@ fun DayScreen(
     onBack: () -> Unit,
     onShiftDay: (Long) -> Unit,
     onDirection: (Direction) -> Unit,
+    /** "Cos'è?" sotto la riga del bus: apre la pagina sui bus sostitutivi. */
+    onBusInfo: () -> Unit = {},
 ) {
     BackHandler(onBack = onBack)  // il tasto "indietro" torna alla mappa
     val colors = MaterialTheme.colorScheme
@@ -144,6 +160,31 @@ fun DayScreen(
                 if (i > 0) HorizontalDivider(color = colors.outlineVariant)
                 HourLine(hour)
             }
+            day.busNote?.let { note ->
+                item {
+                    if (day.hours.isNotEmpty()) HorizontalDivider(color = colors.outlineVariant)
+                    BusNoteLine(note, onBusInfo)
+                }
+            }
+        }
+
+        // Legenda del "?" rosso, solo se in questa giornata ci sono corse da confermare.
+        if (day.hours.any { h -> h.cells.any { it.unconfirmed } }) {
+            Text(
+                buildAnnotatedString {
+                    withStyle(SpanStyle(color = colors.error, fontWeight = FontWeight.Bold)) { append("? ") }
+                    append(
+                        "Corse in più da Acilia verso Roma, annunciate da Cotral ma assenti " +
+                            "dall'orario ufficiale: da confermare."
+                    )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 8.dp, end = 8.dp, top = 8.dp),
+                fontSize = 12.sp,
+                textAlign = TextAlign.Center,
+                color = colors.onSurfaceVariant,
+            )
         }
 
         Text(
@@ -190,20 +231,63 @@ private fun HourLine(hour: HourRow) {
                     ) { append("?") }
                 }
             }
-            Text(
-                text,
-                modifier = Modifier
+            val textColor = when {
+                cell.next -> colors.onPrimary
+                cell.past -> colors.onSurfaceVariant.copy(alpha = 0.5f)
+                else -> colors.onSurface
+            }
+            Row(
+                Modifier
                     .padding(end = 6.dp)
                     .clip(RoundedCornerShape(50))
                     .then(if (cell.next) Modifier.background(colors.primary) else Modifier)
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                fontSize = 18.sp,
-                fontWeight = if (cell.next) FontWeight.Bold else FontWeight.Normal,
-                color = when {
-                    cell.next -> colors.onPrimary
-                    cell.past -> colors.onSurfaceVariant.copy(alpha = 0.5f)
-                    else -> colors.onSurface
-                },
+                    // Il bus al capolinea: contornato, col cartello davanti.
+                    .then(if (cell.bus && !cell.next) Modifier.border(1.5.dp, colors.outlineVariant, RoundedCornerShape(50)) else Modifier)
+                    .padding(start = if (cell.bus) 4.dp else 8.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (cell.bus) {
+                    BusBadge(18.dp, Modifier.alpha(if (cell.past) 0.5f else 1f))
+                    androidx.compose.foundation.layout.Spacer(Modifier.width(4.dp))
+                }
+                Text(
+                    text,
+                    fontSize = 18.sp,
+                    fontWeight = if (cell.next) FontWeight.Bold else FontWeight.Normal,
+                    color = textColor,
+                )
+            }
+        }
+    }
+}
+
+/** In fondo alla giornata: il bus sostitutivo che parte dall'altro capolinea, o "niente bus qui". */
+@Composable
+private fun BusNoteLine(note: BusNote, onInfo: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .alpha(if (note.past) 0.5f else 1f)
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(Modifier.width(48.dp).padding(top = 2.dp)) { BusBadge(26.dp) }
+        Column {
+            Text(note.title, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = colors.onSurface)
+            if (note.text.isNotEmpty()) {
+                Text(note.text, fontSize = 13.sp, color = colors.onSurfaceVariant)
+            }
+            Text(
+                "Cos'è?",
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .clip(RoundedCornerShape(50))
+                    .clickable(onClick = onInfo)
+                    .padding(vertical = 4.dp),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.primary,
             )
         }
     }
