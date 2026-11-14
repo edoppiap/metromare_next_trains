@@ -350,13 +350,21 @@ private fun MapLayer(
             .fillMaxSize()
             .background(if (LocalDarkTheme.current) BackgroundDark else MapPlaceholder)
     ) {
+        // "Vai" sta nell'angolo in basso a destra; "centra" (e la bussola) gli
+        // stanno sopra, e scendono nell'angolo quando "Vai" sparisce.
+        // Il valore è letto solo dentro la funzione qui sotto (al momento di
+        // posizionare i pulsanti): l'animazione non ridisegna tutta la mappa.
+        val vaiSpacePx = with(LocalDensity.current) { (GO_BUTTON_SIZE + 10.dp).toPx() }
+        val vaiSpace by androidx.compose.animation.core.animateFloatAsState(
+            if (state.canGo) vaiSpacePx else 0f, tween(300), label = "vaiSpace",
+        )
         if (showMap) {
             LineMap(
                 stations = state.stations,
                 highlightedIds = state.highlightedIds,
                 night = mapNight,
                 bottomPadding = bottomPadding,
-                controlsLift = controlsLift,
+                controlsLift = { controlsLift() + vaiSpace.roundToInt() },
                 userLocation = state.userLocation,
                 nearestStation = state.nearestStation,
                 travelMode = state.travelMode,
@@ -398,21 +406,25 @@ private fun MapLayer(
                 }
             }
         }
-        // Pulsante "Vai" in basso a sinistra, appena sopra la tendina (a destra
-        // c'è "centra"): compare solo vicino a una stazione o ai binari.
+        // Pulsante "Vai" in basso a destra, appena sopra la tendina, sotto
+        // "centra": compare solo vicino a una stazione o ai binari.
         androidx.compose.animation.AnimatedVisibility(
             visible = state.canGo,
             enter = fadeIn() + androidx.compose.animation.scaleIn(initialScale = 0.6f),
             exit = fadeOut() + androidx.compose.animation.scaleOut(targetScale = 0.6f),
             modifier = Modifier
-                .align(Alignment.BottomStart)
+                .align(Alignment.BottomEnd)
                 .offset { androidx.compose.ui.unit.IntOffset(0, -controlsLift()) }
-                .padding(start = 12.dp, bottom = 12.dp),
+                // Stesso margine destro di "centra": bordi allineati.
+                .padding(end = 12.dp, bottom = 12.dp),
         ) {
             GoButton(onStartGo)
         }
     }
 }
+
+/** Diametro del pulsante "Vai" (gli altri pulsanti della mappa: 44 dp). */
+private val GO_BUTTON_SIZE = 60.dp
 
 /**
  * Pulsante tondo "Vai": avvia la modalità Go (sei sul treno, o stai per
@@ -423,7 +435,7 @@ private fun MapLayer(
 private fun GoButton(onClick: () -> Unit) {
     Box(
         Modifier
-            .size(60.dp)
+            .size(GO_BUTTON_SIZE)
             .shadow(6.dp, CircleShape)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.primary)
