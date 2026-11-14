@@ -772,7 +772,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ): DirectionBlock {
         // Fine della giornata di servizio in corso: le 3 di notte.
         val serviceEnd = (if (now.hour < 3) now.toLocalDate() else now.toLocalDate().plusDays(1)).atTime(3, 0)
-        val all = p.nextDepartures(station.id, d.direction, now, ROWS_PER_DIRECTION)
+        // Un treno resta in lista con "ora" fino a 2 minuti DOPO l'orario: di
+        // solito arriva con 1–2 minuti di ritardo (esperienza dell'utente).
+        val all = p.nextDepartures(station.id, d.direction, now.minusMinutes(LATE_GRACE_MIN), ROWS_PER_DIRECTION)
         val trains = all.filter { it.time.isBefore(serviceEnd) }.map { it.time to toRow(it, now, reach) }
         val bus = p.nextBus(station.id, d.direction, now)
             ?.takeIf { it.departure.isBefore(serviceEnd) }
@@ -868,7 +870,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun toRow(dep: Departure, now: LocalDateTime, reachMinutes: Long? = null): DepartureRow {
         val minutes = Duration.between(now, dep.time).toMinutes()  // arrotondato per difetto
         val (wait, unit) = when {
-            minutes < 1 -> "ora" to ""
+            minutes < 1 -> "ora" to ""  // anche già passato da poco (vedi LATE_GRACE_MIN)
             minutes < 60 -> minutes.toString() to "min"
             else -> "%d h %02d".format(minutes / 60, minutes % 60) to ""
         }
@@ -890,6 +892,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Gli orari sono quelli di Roma, anche se il telefono avesse un altro fuso.
         /** Treni mostrati per direzione in ogni scheda. */
         const val ROWS_PER_DIRECTION = 3
+        /** Minuti dopo l'orario in cui un treno resta in lista con "ora" (spesso è in ritardo). */
+        const val LATE_GRACE_MIN = 2L
         /** Pulsante "Vai": compare entro tanto da una stazione (metri)… */
         const val VAI_STATION_M = 300.0
         /** …o entro tanto dai binari (per chi lo preme a treno già partito). */
