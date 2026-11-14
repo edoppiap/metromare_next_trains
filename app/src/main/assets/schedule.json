@@ -22,7 +22,7 @@
   "minutesFromTerminus": {
     "toOstia": {
       "porta_san_paolo": 0, "basilica_san_paolo": 3, "eur_magliana": 6, "tor_di_valle": 10,
-      "vitinia": 13, "casal_bernocchi": 17, "acilia": 21, "acilia_sud": 22, "ostia_antica": 26,
+      "vitinia": 13, "casal_bernocchi": 17, "acilia": 21, "acilia_sud": 23, "ostia_antica": 26,
       "lido_nord": 29, "lido_centro": 31, "stella_polare": 33, "castel_fusano": 35, "cristoforo_colombo": 37
     },
     "toRoma": {

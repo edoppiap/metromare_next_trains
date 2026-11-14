@@ -302,7 +302,7 @@ private val INFO_TEXTS = mapOf(
 
     InfoPage.CREDITS to """
         Orario
-        Orario ufficiale Metromare (Roma–Lido) in vigore dal 9 novembre 2026, pubblicato da Astral / Regione Lazio.
+        Orario ufficiale Metromare (Roma–Lido) in vigore dal 9 novembre 2026, pubblicato da Astral / Regione Lazio. Controllato con i dati in formato GTFS pubblicati da Cotral.
 
         Corse con il punto interrogativo rosso
         Cotral annuncia tre corse in più da Acilia verso Roma, dal lunedì al venerdì alle 6:10, 7:10 e 8:10, che però non compaiono nel PDF dell'orario ufficiale. L'app le mostra con un punto interrogativo rosso accanto all'orario finché non saranno confermate: potrebbero non esserci.
