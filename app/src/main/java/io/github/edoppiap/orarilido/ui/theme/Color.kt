@@ -4,16 +4,19 @@ import androidx.compose.ui.graphics.Color
 
 // Palette dell'app (vedi CLAUDE.md, sezione Stile):
 // blu della linea + grigio "stazione"; corallo e rosso solo come segnali.
+// Tema chiaro = solo blu e bianco: il blu fa da fondo (tendina, pagine),
+// il bianco porta il contenuto (schede, riquadri).
 
 // Tema chiaro
-val Blue = Color(0xFF0077B3)          // colore della linea
-val Grey = Color(0xFF5F6B76)          // testi secondari
-val GreyLight = Color(0xFFDDE2E7)     // separatori, superfici
-val Background = Color(0xFFF6F8FA)
+val Blue = Color(0xFF0077B3)          // colore della linea, e fondo della tendina e delle pagine
+val Grey = Color(0xFF5F6B76)          // testi secondari (dentro le schede)
+val GreyLight = Color(0xFFDDE2E7)     // separatori dentro le schede
 val Card = Color(0xFFFFFFFF)
 val Ink = Color(0xFF14181C)           // testo principale, numeri
 val Coral = Color(0xFFFF7A59)         // treno in arrivo entro 3 minuti
 val Red = Color(0xFFE03A3E)           // "?" delle corse non confermate
+/** Dietro la mappa, finché non è pronta (= colore della finestra in res/values/colors.xml). */
+val MapPlaceholder = Color(0xFFF6F8FA)
 
 // Tema scuro
 val BlueDark = Color(0xFF4FB0E3)

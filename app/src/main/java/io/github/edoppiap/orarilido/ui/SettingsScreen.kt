@@ -1,5 +1,7 @@
 package io.github.edoppiap.orarilido.ui
 
+import io.github.edoppiap.orarilido.ui.theme.LocalOnBackground
+import io.github.edoppiap.orarilido.ui.theme.LocalDarkTheme
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -213,7 +215,7 @@ private fun SectionTitle(text: String) {
         modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 8.dp),
         fontSize = 13.sp,
         fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.primary,
+        color = LocalOnBackground.current.accent,  // sta sul fondo, fuori dai riquadri
     )
 }
 
@@ -315,7 +317,7 @@ private fun ToggleText(text: String, color: Color) {
  */
 @Composable
 private fun MapPreview(theme: MapTheme) {
-    val appDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val appDark = LocalDarkTheme.current
     val panels = when (theme) {
         MapTheme.AUTO -> listOf(false, true)
         MapTheme.APP -> listOf(appDark)
@@ -404,7 +406,7 @@ private fun PlaceKindGrid(selected: Set<PlaceKind>, enabled: Boolean, onToggle: 
 @Composable
 private fun PlaceKindChip(kind: PlaceKind, checked: Boolean, enabled: Boolean, onClick: () -> Unit, modifier: Modifier) {
     val colors = MaterialTheme.colorScheme
-    val dark = colors.background.luminance() < 0.5f
+    val dark = LocalDarkTheme.current
     val density = LocalDensity.current.density
     // La stessa icona disegnata a mano della mappa (PlaceIcons.kt), col bordino del colore della scheda.
     val icon = remember(kind, dark, density) {

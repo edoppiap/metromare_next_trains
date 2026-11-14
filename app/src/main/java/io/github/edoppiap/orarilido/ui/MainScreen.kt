@@ -1,5 +1,11 @@
 package io.github.edoppiap.orarilido.ui
 
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.draw.drawBehind
+import io.github.edoppiap.orarilido.ui.theme.LocalOnBackground
+import io.github.edoppiap.orarilido.ui.theme.LocalDarkTheme
+import io.github.edoppiap.orarilido.ui.theme.MapPlaceholder
+import io.github.edoppiap.orarilido.ui.theme.BackgroundDark
 import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.SideEffect
@@ -48,6 +54,7 @@ import kotlin.math.roundToInt
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -160,7 +167,7 @@ fun MainScreen(
     // e senza chiave la soglia resterebbe 0 per sempre (era il bug "a tendina aperta non cambia").
     // Si cambia colore quando il bordo della tendina entra sotto la barra.
     val sheetUnderStatusBar by remember(statusBarPx) { derivedStateOf { sheet.offset < statusBarPx } }
-    val appIsLight = MaterialTheme.colorScheme.background.luminance() > 0.5f
+    val appIsLight = !LocalDarkTheme.current
     // Stile della mappa scelto nelle Impostazioni: Auto = giorno/notte col sole.
     val mapNight = when (state.settings.mapTheme) {
         MapTheme.AUTO -> state.mapNight
@@ -168,16 +175,18 @@ fun MainScreen(
         MapTheme.LIGHT -> false
         MapTheme.DARK -> true
     }
-    val lightIcons = if (overlayOpen || sheetUnderStatusBar) !appIsLight else mapNight
+    // Tendina in cima o pagina sopra: dietro c'è il fondo dell'app, blu nel chiaro
+    // e quasi nero nello scuro, quindi in entrambi i casi icone bianche.
+    val lightIcons = if (overlayOpen || sheetUnderStatusBar) true else mapNight
     val view = LocalView.current
     SideEffect {
         val window = (view.context as? Activity)?.window ?: return@SideEffect
         // "Appearance light" = sfondo chiaro, quindi icone SCURE.
         val insets = WindowCompat.getInsetsController(window, view)
         insets.isAppearanceLightStatusBars = !lightIcons
-        // In basso c'è sempre la tendina (o una pagina): segue il tema dell'app,
-        // anche quando è diverso da quello del telefono.
-        insets.isAppearanceLightNavigationBars = appIsLight
+        // In basso c'è sempre il fondo della tendina (o di una pagina): blu nel
+        // chiaro, quasi nero nello scuro. Icone bianche in entrambi i casi.
+        insets.isAppearanceLightNavigationBars = false
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -302,7 +311,7 @@ private fun MapLayer(
     Box(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(if (LocalDarkTheme.current) BackgroundDark else MapPlaceholder)
     ) {
         if (showMap) {
             LineMap(
@@ -373,32 +382,44 @@ private fun CollapsedStrip(
     val colors = MaterialTheme.colorScheme
     // Ai capolinea c'è una sola direzione: si mostra quella, senza selettore.
     val block = card.blocks.firstOrNull { it.direction == direction } ?: card.blocks.firstOrNull() ?: return
+    val onFondo = LocalOnBackground.current
+    // Misure: le stesse a cui arriva la scheda che si trasforma (StationCard con morph = 1).
     Column(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(start = 20.dp, end = 12.dp, top = 2.dp, bottom = 4.dp),
+            .padding(horizontal = 12.dp),  // = margini della lista
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // Nome e distanza sul fondo, fuori dalla scheda.
+        Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 card.name,
                 modifier = Modifier.weight(1f),
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
-                color = colors.onBackground,
+                color = onFondo.text,
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
-            card.distance?.let { Text(it, fontSize = 13.sp, color = colors.onSurfaceVariant) }
+            card.distance?.let { Text(it, fontSize = 13.sp, color = onFondo.muted) }
         }
-        Spacer(Modifier.height(6.dp))
-        // Selettore a sinistra, orari a destra, sulla stessa riga (come nelle schede).
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Spacer(Modifier.height(STRIP_GAP))
+        // Selettore a sinistra, orari a destra, sulla stessa riga (come nelle schede),
+        // dentro una scheda bianca.
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(STRIP_CARD_RADIUS))
+                .background(colors.surface)
+                .padding(start = 8.dp, end = 8.dp, top = STRIP_CARD_PAD, bottom = STRIP_CARD_PAD),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             if (card.blocks.size > 1) {
                 SegmentedToggle(
                     options = listOf(Direction.TO_OSTIA to "Ostia", Direction.TO_ROMA to "Roma"),
                     selected = block.direction,
                     onSelect = onDirection,
+                    background = colors.outlineVariant,  // pista grigia: dentro la scheda bianca
                     segmentPadding = 10.dp,
                 )
             } else {
@@ -414,12 +435,18 @@ private fun CollapsedStrip(
                 modifier = Modifier.weight(1f),
             ) { b ->
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    DepartureCells(b, bigSize = 20.sp, smallSize = 15.sp, textColor = colors.onBackground)
+                    DepartureCells(b, bigSize = 20.sp, smallSize = 15.sp, textColor = colors.onSurface)
                 }
             }
         }
     }
 }
+
+/** Striscia: spazio tra il nome (sul fondo) e la scheda degli orari. */
+private val STRIP_GAP = 4.dp
+/** Striscia: spazio interno della scheda sopra e sotto gli orari. */
+private val STRIP_CARD_PAD = 6.dp
+private val STRIP_CARD_RADIUS = 16.dp
 
 /**
  * Direzione mostrata di default nella striscia: verso Roma, tranne che dalle
@@ -588,16 +615,18 @@ private fun GoRecognizingRow() {
  */
 @Composable
 private fun GoHeader(directionTitle: String, showHint: Boolean, showNextLabel: Boolean, collapse: () -> Float) {
+    val onFondo = LocalOnBackground.current
     Column(Modifier.padding(start = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "In treno",
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = onFondo.text,
             )
             Spacer(Modifier.width(10.dp))
-            DirectionPill(directionTitle)
+            // Pillola posata sul fondo: nel chiaro si inverte (bianca, testo blu).
+            DirectionPill(directionTitle, background = onFondo.pill, textColor = onFondo.onPill)
             Spacer(Modifier.weight(1f))
             // A mappa piena "Prossima fermata" sta qui (nella scheda non c'è più posto).
             if (showNextLabel) {
@@ -606,7 +635,7 @@ private fun GoHeader(directionTitle: String, showHint: Boolean, showNextLabel: B
                     modifier = Modifier.padding(end = 4.dp).graphicsLayer { alpha = collapse() },
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = onFondo.muted,
                 )
             }
         }
@@ -615,7 +644,7 @@ private fun GoHeader(directionTitle: String, showHint: Boolean, showNextLabel: B
                 if (showHint) "\nTocca la tua fermata per tenerla in vista." else "",
             modifier = Modifier.collapseHeight(collapse).padding(top = 6.dp),
             fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = onFondo.muted,
         )
     }
 }
@@ -710,13 +739,13 @@ private fun GoStopCard(
 @Composable
 private fun GoAheadHeader(modifier: Modifier = Modifier) {
     Column(modifier.padding(top = 8.dp)) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = LocalOnBackground.current.line)
         Text(
             "Fermate davanti",
             modifier = Modifier.padding(start = 4.dp, top = 10.dp),
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
+            color = LocalOnBackground.current.text,
         )
     }
 }
@@ -731,7 +760,7 @@ private fun PrimaryHeader(mode: PrimaryMode, onModeChange: (PrimaryMode) -> Unit
             modifier = Modifier.weight(1f),
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
+            color = LocalOnBackground.current.text,
         )
         ModeToggle(mode, onModeChange)
     }
@@ -762,8 +791,9 @@ private fun FavoritesHint() {
 /** "Altre stazioni ───── orari programmati · dal 9/11/2026" */
 @Composable
 private fun OthersHeader(validFrom: String) {
+    val onFondo = LocalOnBackground.current
     Column(Modifier.padding(top = 8.dp)) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = onFondo.line)
         Row(
             Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 10.dp),
             verticalAlignment = Alignment.Bottom,
@@ -773,12 +803,12 @@ private fun OthersHeader(validFrom: String) {
                 modifier = Modifier.weight(1f),
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = onFondo.text,
             )
             Text(
                 "Orari programmati · in vigore dal $validFrom",
                 fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = onFondo.muted,
             )
         }
     }
@@ -803,7 +833,8 @@ private fun SheetCard(content: @Composable () -> Unit) {
  * si trasforma mentre la tendina scende: 0 = scheda normale, 1 = IDENTICA alla
  * striscia ([CollapsedStrip]), che a quel punto le si sostituisce senza che si
  * veda. Gli stili delle due restano quelli: qui si passa dall'uno all'altro.
- *   - sfondo della scheda che svanisce, margini che diventano quelli della striscia;
+ *   - il fondo bianco della scheda che si ritira da sotto il nome (che resta
+ *     sul fondo della tendina e diventa bianco), fermandosi sotto di lui;
  *   - nome e orari che si rimpiccioliscono, stella che si chiude;
  *   - la riga dell'altra direzione che si chiude ([keptDirection] = quella della striscia);
  *   - la pillola "Verso Roma" che sfuma nel selettore [Ostia | Roma].
@@ -817,27 +848,44 @@ private fun StationCard(
     keptDirection: Direction? = null,
 ) {
     val colors = MaterialTheme.colorScheme
+    val onFondo = LocalOnBackground.current
     // Letto qui: a ogni fotogramma della discesa si ridisegna solo questa scheda.
     val p = morph?.invoke() ?: 0f
+    // Altezza della riga del nome: serve a sapere fin dove ritirare il fondo bianco.
+    var nameRowHeight by remember { mutableFloatStateOf(0f) }
+    val cardColor = colors.surface
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(colors.surface.copy(alpha = colors.surface.alpha * (1f - p)))
+            // Il fondo bianco: a p = 0 copre tutta la scheda; scendendo il suo bordo
+            // alto si abbassa fino a sotto il nome (come nella striscia).
+            .drawBehind {
+                val top = p * (nameRowHeight + STRIP_GAP.toPx())
+                drawRoundRect(
+                    cardColor,
+                    topLeft = androidx.compose.ui.geometry.Offset(0f, top),
+                    size = androidx.compose.ui.geometry.Size(size.width, size.height - top),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(lerp(20.dp, STRIP_CARD_RADIUS, p).toPx()),
+                )
+            }
             .padding(
                 start = lerp(16.dp, 8.dp, p),   // + 12 dp della lista = 20 dp della striscia
-                end = lerp(8.dp, 0.dp, p),      // + 12 dp della lista = 12 dp della striscia
-                top = lerp(8.dp, 2.dp, p),
-                bottom = lerp(14.dp, 4.dp, p),
+                end = 8.dp,
+                top = lerp(8.dp, 0.dp, p),
+                bottom = lerp(14.dp, STRIP_CARD_PAD, p),
             ),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.onSizeChanged { nameRowHeight = it.height.toFloat() },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
                 card.name,
                 modifier = Modifier.weight(1f),
                 fontSize = lerp(20.sp, 17.sp, p),
                 fontWeight = FontWeight.Bold,
-                color = androidx.compose.ui.graphics.lerp(colors.onSurface, colors.onBackground, p),
+                // Mentre il fondo bianco si ritira, il nome passa ai colori "sul fondo".
+                color = androidx.compose.ui.graphics.lerp(colors.onSurface, onFondo.text, p),
                 // La striscia ha una riga sola; la scheda ferma va a capo come sempre.
                 maxLines = if (p > 0f) 1 else Int.MAX_VALUE,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
@@ -848,7 +896,7 @@ private fun StationCard(
                     it,
                     fontSize = lerp(14.sp, 13.sp, p),
                     fontWeight = androidx.compose.ui.text.font.lerp(FontWeight.SemiBold, FontWeight.Normal, p),
-                    color = colors.onSurfaceVariant,
+                    color = androidx.compose.ui.graphics.lerp(colors.onSurfaceVariant, onFondo.muted, p),
                 )
             }
             // Stella: piena e blu se preferita, vuota e grigia altrimenti. Nella striscia non c'è: si chiude.
@@ -863,8 +911,9 @@ private fun StationCard(
                 color = if (card.favorite) colors.primary else colors.onSurfaceVariant,
             )
         }
-        // Spazio tra nome e orari: nella striscia c'è, nella scheda lo fa la stella.
-        Spacer(Modifier.height(lerp(0.dp, 6.dp, p)))
+        // Spazio tra nome e orari: nella striscia c'è (fondo + interno della scheda),
+        // nella scheda ferma lo fa la stella.
+        Spacer(Modifier.height(lerp(0.dp, STRIP_GAP + STRIP_CARD_PAD, p)))
         Column(Modifier.padding(end = lerp(8.dp, 0.dp, p))) {
             card.blocks.forEachIndexed { i, block ->
                 // La riga che resta nella striscia; ai capolinea c'è solo quella.
@@ -919,6 +968,7 @@ private fun CompactDirectionRow(
                         options = listOf(Direction.TO_OSTIA to "Ostia", Direction.TO_ROMA to "Roma"),
                         selected = block.direction,
                         onSelect = {},
+                        background = MaterialTheme.colorScheme.outlineVariant,
                         segmentPadding = 10.dp,
                     )
                 } else {
@@ -931,7 +981,7 @@ private fun CompactDirectionRow(
             block,
             bigSize = lerp(22.sp, 20.sp, p),
             smallSize = lerp(16.sp, 15.sp, p),
-            textColor = androidx.compose.ui.graphics.lerp(colors.onSurface, colors.onBackground, p),
+            textColor = colors.onSurface,
         )
     }
 }
@@ -1037,13 +1087,16 @@ private fun DirectionPill(
     text: String,
     modifier: Modifier = Modifier,
     fontSize: androidx.compose.ui.unit.TextUnit = 14.sp,
+    // Di solito blu con testo bianco; posata sul fondo blu (Go) si inverte.
+    background: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary,
+    textColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onPrimary,
 ) {
     Text(
         text,
         modifier = modifier
-            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(50))
+            .background(background, RoundedCornerShape(50))
             .padding(horizontal = 10.dp, vertical = 4.dp),
-        color = MaterialTheme.colorScheme.onPrimary,
+        color = textColor,
         fontWeight = FontWeight.Bold,
         fontSize = fontSize,
         maxLines = 1,

@@ -1,5 +1,6 @@
 package io.github.edoppiap.orarilido.ui
 
+import io.github.edoppiap.orarilido.ui.theme.LocalOnBackground
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -59,6 +60,7 @@ fun InfoScreen(
     val back = { onNavigate(if (page == InfoPage.MENU || standalone) null else InfoPage.MENU) }
     BackHandler(onBack = back)
     val colors = MaterialTheme.colorScheme
+    val onFondo = LocalOnBackground.current
 
     Column(
         Modifier
@@ -68,8 +70,8 @@ fun InfoScreen(
             .padding(horizontal = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = back) { Chevron(colors.primary, pointsLeft = true) }
-            Text(page.title, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+            IconButton(onClick = back) { Chevron(onFondo.accent, pointsLeft = true) }
+            Text(page.title, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = onFondo.text)
         }
 
         Column(
@@ -151,7 +153,7 @@ private fun DebugList(actions: List<Pair<String, () -> Unit>>) {
         modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 6.dp),
         fontSize = 13.sp,
         fontWeight = FontWeight.Bold,
-        color = colors.onSurfaceVariant,
+        color = LocalOnBackground.current.muted,
     )
     Column(
         Modifier
@@ -195,7 +197,7 @@ private fun MenuList(onNavigate: (InfoPage) -> Unit) {
             .padding(top = 16.dp),
         textAlign = TextAlign.Center,
         fontSize = 12.sp,
-        color = colors.onSurfaceVariant,
+        color = LocalOnBackground.current.muted,
     )
 }
 

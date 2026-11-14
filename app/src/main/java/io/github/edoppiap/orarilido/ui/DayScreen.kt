@@ -1,5 +1,6 @@
 package io.github.edoppiap.orarilido.ui
 
+import io.github.edoppiap.orarilido.ui.theme.LocalOnBackground
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -90,6 +91,7 @@ fun DayScreen(
 ) {
     BackHandler(onBack = onBack)  // il tasto "indietro" torna alla mappa
     val colors = MaterialTheme.colorScheme
+    val onFondo = LocalOnBackground.current  // titolo e note stanno sul fondo, fuori dai riquadri
     val listState = rememberLazyListState()
     // Quando cambiano giorno o direzione, scorri all'ora del prossimo treno
     // (una riga sopra, per vedere anche il treno appena passato).
@@ -106,8 +108,8 @@ fun DayScreen(
     ) {
         // Intestazione: indietro + nome stazione
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Chevron(colors.primary, pointsLeft = true) }
-            Text(day.stationName, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+            IconButton(onClick = onBack) { Chevron(onFondo.accent, pointsLeft = true) }
+            Text(day.stationName, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = onFondo.text)
         }
 
         // Selettore del giorno: ‹  Oggi · giovedì 12 novembre · Feriale  ›
@@ -172,7 +174,7 @@ fun DayScreen(
         if (day.hours.any { h -> h.cells.any { it.unconfirmed } }) {
             Text(
                 buildAnnotatedString {
-                    withStyle(SpanStyle(color = colors.error, fontWeight = FontWeight.Bold)) { append("? ") }
+                    withStyle(SpanStyle(color = onFondo.question, fontWeight = FontWeight.Bold)) { append("? ") }
                     append(
                         "Corse in più da Acilia verso Roma, annunciate da Cotral ma assenti " +
                             "dall'orario ufficiale: da confermare."
@@ -183,7 +185,7 @@ fun DayScreen(
                     .padding(start = 8.dp, end = 8.dp, top = 8.dp),
                 fontSize = 12.sp,
                 textAlign = TextAlign.Center,
-                color = colors.onSurfaceVariant,
+                color = onFondo.muted,
             )
         }
 
@@ -194,7 +196,7 @@ fun DayScreen(
                 .padding(vertical = 8.dp),
             fontSize = 11.sp,
             textAlign = TextAlign.Center,
-            color = colors.onSurfaceVariant,
+            color = onFondo.muted,
         )
     }
 }

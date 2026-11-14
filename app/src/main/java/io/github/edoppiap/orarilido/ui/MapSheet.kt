@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import io.github.edoppiap.orarilido.ui.theme.LocalOnBackground
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
@@ -304,6 +305,6 @@ private fun DragHandle() {
         Modifier
             .padding(top = 8.dp, bottom = 6.dp)
             .size(width = 36.dp, height = 4.dp)
-            .background(MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(2.dp))
+            .background(LocalOnBackground.current.line, RoundedCornerShape(2.dp))
     )
 }
