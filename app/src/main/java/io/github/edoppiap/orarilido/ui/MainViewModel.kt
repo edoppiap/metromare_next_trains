@@ -73,6 +73,8 @@ data class MainUiState(
     val travelMode: TravelMode = TravelMode.WALK,
     /** Modalità Go: null = spenta (non sei sul treno). */
     val go: GoUi? = null,
+    /** Pulsante "Vai" visibile: GPS acceso, Go spenta, sei vicino a una stazione o ai binari. */
+    val canGo: Boolean = false,
     /** Simulazione di viaggio in corso (solo build di prova). */
     val simulating: Boolean = false,
     /** Percorso suggerito verso la stazione più vicina (null = nessuno: senza GPS, in Go, fuori zona). */
@@ -105,15 +107,10 @@ data class RouteUi(
     val baseMinutes: Double,
 )
 
-/**
- * Modalità Go, già pronta da disegnare.
- * Con [recognizing] = true sembra un treno ma non è ancora confermato:
- * la tendina mostra solo la riga "Sei in treno? Sto riconoscendo la corsa…".
- */
+/** Modalità Go, già pronta da disegnare. */
 data class GoUi(
-    val recognizing: Boolean,
-    /** "Verso Ostia" / "Verso Roma" (vuoto durante il riconoscimento). */
-    val directionTitle: String = "",
+    /** Verso dove va il treno (selettore Ostia | Roma nell'intestazione). */
+    val direction: Direction,
     /** Le fermate davanti, dalla prossima al capolinea. */
     val stops: List<GoStopUi> = emptyList(),
     /** Cosa mostra la striscia a mappa piena: la fermata fissata col tocco, o la prossima. */
@@ -196,12 +193,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var detector: GoDetector? = null
     /** Il tracciato come "righello" (serve anche al simulatore). */
     private var track: LineTrack? = null
-    /**
-     * L'utente ha chiuso Go con la X: non si riaccende sullo stesso viaggio
-     * (sei ancora sul treno, la riconoscerebbe subito). Torna possibile quando
-     * il riconoscitore esce da solo (sei sceso, ti sei fermato).
-     */
-    private var goDismissed = false
+    /** Ultima posizione vera dal GPS (solo in memoria): serve al pulsante "Vai". */
+    private var lastSample: GoSample? = null
     /** Fermata fissata toccando la sua scheda (la striscia mostra quella). */
     private var pinnedStopId: String? = null
     /**
@@ -258,10 +251,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 LineTrack(LineTrack.parsePoints(app.assets.open("line.json").bufferedReader().use { it.readText() }), p.stations)
             }
             this@MainViewModel.track = track
-            detector = GoDetector(track, p.stations, p::minutesFromTerminus) { index, direction, time ->
-                // In simulazione il viaggio è finto: si accetta a qualunque ora.
-                simulation != null || p.trainPossible(p.stations[index].id, direction, time)
-            }
+            // Go parte solo col pulsante "Vai" (autoStart = false): il controllo
+            // dell'orario serviva al riconoscimento automatico, qui non conta.
+            detector = GoDetector(track, p.stations, p::minutesFromTerminus, autoStart = false)
 
             // La rete di strade per il percorso suggerito (~0,7 MB): ancora dopo,
             // e su un altro thread. Il percorso compare quando è pronta.
@@ -301,11 +293,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         // Modalità Go: se sei sul treno, la mappa ti mostra "agganciato" ai binari,
         // con le fermate davanti evidenziate e la prossima come riferimento.
-        // Modalità treno spenta nelle Impostazioni: come se il riconoscitore non ci fosse
-        // (la simulazione della build di prova funziona comunque).
-        val goState = detector?.state?.takeIf { settings.goOn || simulation != null }
-        if (goState == GoState.Off) goDismissed = false  // sceso dal treno: la X non vale più
-        val onTrain = (goState as? GoState.OnTrain)?.takeUnless { goDismissed }
+        val onTrain = detector?.state as? GoState.OnTrain
         // Inizio di un viaggio: si fissa da sola la fermata scelta l'ultima volta
         // in questa direzione (se è ancora davanti a te).
         if (onTrain == null) {
@@ -316,13 +304,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val default = goDefaults[onTrain.direction]
             if (default != null && onTrain.ahead.any { it.station.id == default }) pinnedStopId = default
         }
-        val go = when {
-            goDismissed -> null
-            onTrain != null -> buildGo(onTrain, now)
-            goState is GoState.Detecting -> GoUi(recognizing = true)
-            else -> null
-        }
+        val go = onTrain?.let { buildGo(it, now) }
         _fastGps.value = go != null && simulation == null
+        // Il pallino in Go: dove dovresti essere ADESSO secondo l'orario, partendo
+        // dall'ultima posizione (il GPS in treno aggiorna a scatti). Così si muove
+        // in modo fluido lungo i binari invece di stare fermo e poi saltare.
+        val goPoint = onTrain?.let { s -> detector?.estimateAlong(now)?.let { track?.pointAt(it) } ?: s.pointOnLine }
 
         // Stazione di riferimento: la più vicina, ma in modalità Preferite la preferita
         // più vicina (es. vai a Stella Polare per i posti a sedere, o ad Acilia Sud
@@ -345,10 +332,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             stations = p.stations,
             validFrom = p.validFrom.format(DATE),
             mapNight = SunTimes.isNight(now.atZone(ROME)),
-            userLocation = onTrain?.pointOnLine ?: user,
+            userLocation = goPoint ?: user,
             nearestStation = onTrain?.ahead?.firstOrNull()?.station ?: focus,
             travelMode = travelMode,
             go = go,
+            canGo = go == null && user != null && nearLine(user),
             simulating = simulation != null,
             route = route,
             settings = settings,
@@ -374,8 +362,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         if (stops.none { it.pinned }) pinnedStopId = null  // fermata fissata ormai passata
         return GoUi(
-            recognizing = false,
-            directionTitle = DIRECTIONS.first { it.direction == s.direction }.title,
+            direction = s.direction,
             stops = stops,
             stripStop = stops.firstOrNull { it.pinned } ?: stops.firstOrNull(),
             // Senza fermata fissata: tu + le prossime due, abbastanza per orientarsi al buio.
@@ -396,15 +383,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (simulation != null) return  // durante la simulazione conta solo la posizione finta
         // Il riconoscitore vuole l'ora in cui la posizione è stata PRESA
         // (l'ultima nota, all'apertura, può avere qualche minuto).
-        val sample = GoSample(fix.point, now().minusNanos(fix.ageMillis * 1_000_000))
-        // Posizioni troppo imprecise confonderebbero il riconoscimento del treno.
-        onSample(sample, feedDetector = (fix.accuracy ?: 0f) <= MAX_GO_ACCURACY_M)
+        val sample = GoSample(fix.point, now().minusNanos(fix.ageMillis * 1_000_000), fix.accuracy?.toDouble())
+        // In treno il GPS a volte ripete identica la posizione di prima: non è
+        // una posizione nuova (sembrerebbe "fermo"), quindi Go non la riceve.
+        val repeated = lastSample?.point == sample.point
+        lastSample = sample
+        onSample(sample, feedDetector = !repeated)
     }
 
     private fun onSample(sample: GoSample, feedDetector: Boolean = true) {
         userLocation = sample.point
-        // Modalità treno spenta: il riconoscitore non riceve posizioni (salvo in simulazione).
-        if (feedDetector && (settings.goOn || simulation != null)) detector?.update(sample)
+        // Il rilevatore riceve TUTTE le posizioni, anche imprecise: in Go pesa
+        // ciascuna secondo la sua precisione (vedi GoDetector.updateOnTrain).
+        if (feedDetector) detector?.update(sample)
         if (provider == null) return  // orario non ancora caricato: ci pensa init
         updateNearest(sample.point)
         refresh()
@@ -461,11 +452,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun updateSettings(change: (AppSettings) -> AppSettings) {
         val new = change(settings)
         if (new == settings) return
-        // Modalità treno spenta: si dimentica anche un riconoscimento a metà.
-        if (!new.goOn && settings.goOn) {
-            detector?.reset()
-            pinnedStopId = null
-        }
         settings = new
         refresh()
         viewModelScope.launch { orariApp.stationPrefs.setSettings(new) }
@@ -485,11 +471,62 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         route = null
     }
 
-    /** Pulsante X: esci dalla modalità Go per questo viaggio. */
+    /** Pulsante X: esci dalla modalità Go. */
     fun exitGo() {
-        goDismissed = true
+        detector?.stop()
         pinnedStopId = null
         refresh()
+    }
+
+    /**
+     * Pulsante "Vai": entra in Go dalla tua posizione. La direzione non si
+     * chiede: si sceglie quella più probabile ([likelyDirection]) e si può
+     * cambiare col selettore; se il treno va dall'altra parte si gira da sola.
+     */
+    fun startGo() {
+        val p = provider ?: return
+        val d = detector ?: return
+        val t = track ?: return
+        val sample = lastSample ?: return
+        val now = now()
+        val nearest = t.stationAlong.indices.minBy { abs(t.stationAlong[it] - t.project(sample.point).alongMeters) }
+        d.start(likelyDirection(p, p.stations[nearest].id, now), sample.copy(time = now))
+        pinnedStopId = null
+        refresh()
+    }
+
+    /** Selettore Ostia | Roma in Go: corregge la direzione scelta da "Vai". */
+    fun setGoDirection(direction: Direction) {
+        detector?.setDirection(direction)
+        goDefaultApplied = false  // nuova direzione: vale la sua fermata preferita
+        pinnedStopId = null
+        refresh()
+    }
+
+    /**
+     * La direzione in cui stai probabilmente andando premendo "Vai" vicino a
+     * [stationId]: ai capolinea è una sola; altrimenti quella del treno appena
+     * passato (entro 2 minuti: ci sei appena salito), se no quella del treno
+     * che arriva prima (lo stai aspettando).
+     */
+    private fun likelyDirection(p: ScheduleProvider, stationId: String, now: LocalDateTime): Direction {
+        val served = Direction.entries.filter { p.servesDirection(stationId, it) }
+        if (served.size == 1) return served.first()
+        val justPassed = served.firstOrNull { dir ->
+            p.nextDepartures(stationId, dir, now.minusMinutes(JUST_BOARDED_MIN), 1)
+                .firstOrNull()?.time?.isBefore(now) == true
+        }
+        return justPassed ?: served.minBy { dir ->
+            p.nextDepartures(stationId, dir, now, 1).firstOrNull()?.time ?: LocalDateTime.MAX
+        }
+    }
+
+    /** Vicino a una stazione o ai binari: lì ha senso il pulsante "Vai". */
+    private fun nearLine(point: GeoPoint): Boolean {
+        val t = track ?: return false
+        val p = provider ?: return false
+        return t.project(point).offsetMeters <= VAI_TRACK_M ||
+            p.stations.any { Geo.distanceMeters(point, GeoPoint(it.lat, it.lon)) <= VAI_STATION_M }
     }
 
     /** Tocco sulla scheda di una fermata in Go: la fissa nella striscia (o la sblocca). */
@@ -527,15 +564,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         simClock = { start.plusNanos((System.nanoTime() - t0) * SIM_SPEED) }
         val samples = RideSimulator.ride(track, p.minutesFromTerminus(direction), from, to, start)
         d.reset()
-        goDismissed = false
         pinnedStopId = null
         // LAZY: parte solo dopo essere stato salvato in "simulation", così il
         // "finally" sa riconoscere se è ancora lui la simulazione in corso.
         val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
-                for (s in samples) {
+                for ((i, s) in samples.withIndex()) {
                     val waitMs = Duration.between(now(), s.time).toMillis() / SIM_SPEED
                     if (waitMs > 0) delay(waitMs)
+                    // Alla prima posizione: come premere "Vai" alla stazione di partenza.
+                    if (i == 0) d.start(direction, s)
                     onSample(s)
                 }
             } finally {
@@ -852,8 +890,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Gli orari sono quelli di Roma, anche se il telefono avesse un altro fuso.
         /** Treni mostrati per direzione in ogni scheda. */
         const val ROWS_PER_DIRECTION = 3
-        /** Posizioni meno precise di così non vengono date al riconoscitore del treno. */
-        const val MAX_GO_ACCURACY_M = 50f
+        /** Pulsante "Vai": compare entro tanto da una stazione (metri)… */
+        const val VAI_STATION_M = 300.0
+        /** …o entro tanto dai binari (per chi lo preme a treno già partito). */
+        const val VAI_TRACK_M = 80.0
+        /** "Vai" premuto entro 2 minuti dal passaggio di un treno: sei salito su quello. */
+        const val JUST_BOARDED_MIN = 2L
         /** Percorso: si ricalcola solo se ti sei spostato almeno di tanto (metri). */
         const val ROUTE_MIN_MOVE_M = 15.0
         /** Limiti delle zone coperte da walk.bin (vedi tools/osm_graph.py --write). */

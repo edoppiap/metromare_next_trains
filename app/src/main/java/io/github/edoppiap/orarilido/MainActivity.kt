@@ -92,6 +92,8 @@ class MainActivity : ComponentActivity() {
                         onToggleFavorite = viewModel::toggleFavorite,
                         onTravelMode = viewModel::setTravelMode,
                         onExitGo = viewModel::exitGo,
+                        onStartGo = viewModel::startGo,
+                        onGoDirection = viewModel::setGoDirection,
                         onPinStop = viewModel::togglePinnedStop,
                         onMenu = { infoPage = InfoPage.MENU },
                         overlayOpen = day != null || infoPage != null,
@@ -187,7 +189,10 @@ class MainActivity : ComponentActivity() {
                 while (true) {
                     viewModel.refresh()
                     val toNextMinute = 60_000 - System.currentTimeMillis() % 60_000
-                    delay(minOf(20_000, toNextMinute + 50))  // +50 ms: per sicurezza oltre il minuto
+                    // In Go ogni secondo: il pallino avanza sui binari tra una
+                    // posizione GPS e l'altra (vedi GoDetector.estimateAlong).
+                    val step = if (viewModel.state.value.go != null) 1_000L else minOf(20_000, toNextMinute + 50)
+                    delay(step)  // +50 ms: per sicurezza oltre il minuto
                 }
             }
         }

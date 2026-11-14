@@ -32,8 +32,6 @@ data class AppSettings(
     val bikeLevel: Int = Speeds.NORMAL,
     /** Sbiadisci nelle schede i treni che non fai in tempo a prendere. */
     val fadeMissed: Boolean = false,
-    /** Modalità Go: riconosci da sola quando sei sul treno. */
-    val goOn: Boolean = true,
 ) {
     /** Metri al minuto con il mezzo scelto e la velocità impostata per lui. */
     fun metersPerMinute(mode: TravelMode): Double =

@@ -160,17 +160,6 @@ fun SettingsPage(
         )
     }
 
-    // ---- In treno ----
-    SectionTitle("In treno")
-    SettingsCard {
-        SwitchRow(
-            title = "Riconosci quando sono in treno",
-            subtitle = "Mostra le fermate davanti e quando ci arrivi. Solo con l'app aperta.",
-            checked = settings.goOn,
-            onCheckedChange = { on -> onChange { it.copy(goOn = on) } },
-        )
-    }
-
     // ---- Orario ----
     SectionTitle("Orario")
     SettingsCard {

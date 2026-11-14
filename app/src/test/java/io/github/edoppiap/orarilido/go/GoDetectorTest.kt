@@ -341,4 +341,62 @@ class GoDetectorTest {
         assertTrue(onTrain.all { it.direction == Direction.TO_ROMA })
         assertEquals(GoState.Off, states.last())
     }
+
+    // --- Avvio col pulsante "Vai" (dal 15/11) ------------------------------
+
+    private fun manualDetector() = GoDetector(track, stations, provider::minutesFromTerminus, autoStart = false)
+
+    @Test
+    fun `senza pulsante Go non parte da sola`() {
+        val d = manualDetector()
+        assertTrue(d.feed(trainRide("vitinia", "lido_centro", morning)).all { it == GoState.Off })
+    }
+
+    @Test
+    fun `Vai a Vitinia, poi GPS a scatti e impreciso - Go resta e gli arrivi tengono`() {
+        val d = manualDetector()
+        val ride = trainRide("vitinia", "lido_centro", morning)
+        d.start(Direction.TO_OSTIA, ride.first())
+        // Come sul treno vero: una posizione al minuto, da celle telefoniche (± 150 m).
+        val sparse = ride.filterIndexed { i, _ -> i > 0 && i % 12 == 0 }.map { it.copy(accuracy = 150.0) }
+        val states = d.feed(sparse)
+        assertTrue("uscita da Go durante il viaggio", states.all { it is GoState.OnTrain })
+        // Lido Centro dall'orario alle 08:31: al massimo un minuto di scarto.
+        states.filterIsInstance<GoState.OnTrain>().forEach { s ->
+            val lido = s.ahead.firstOrNull { it.station.id == "lido_centro" } ?: return@forEach
+            val off = java.time.Duration.between(LocalDateTime.of(2026, 11, 16, 8, 31), lido.time).seconds
+            assertTrue("arrivo a Lido Centro spostato di $off s", abs(off) <= 60)
+        }
+    }
+
+    @Test
+    fun `senza posizioni nuove il pallino avanza coi tempi dell'orario, fino alla prossima stazione`() {
+        val d = manualDetector()
+        d.start(Direction.TO_OSTIA, GoSample(pointNear(along("vitinia")), morning))
+        val after1 = d.estimateAlong(morning.plusMinutes(1))!!
+        val after2 = d.estimateAlong(morning.plusMinutes(2))!!
+        assertTrue("dopo 1 min non si è mosso", after1 > along("vitinia") + 200)
+        assertTrue("dopo 2 min non è più avanti di dopo 1", after2 > after1)
+        // Dopo 10 minuti senza GPS si aspetta alla prossima stazione (Casal Bernocchi).
+        assertEquals(along("casal_bernocchi"), d.estimateAlong(morning.plusMinutes(10))!!, 1.0)
+    }
+
+    @Test
+    fun `direzione sbagliata al Vai - si corregge da sola appena il treno si muove`() {
+        val d = manualDetector()
+        val ride = trainRide("vitinia", "acilia", morning)
+        d.start(Direction.TO_ROMA, ride.first())
+        val last = d.feed(ride.drop(1)).last { it is GoState.OnTrain } as GoState.OnTrain
+        assertEquals(Direction.TO_OSTIA, last.direction)
+    }
+
+    @Test
+    fun `direzione scelta a mano - la correzione automatica non la ribalta`() {
+        val d = manualDetector()
+        val ride = trainRide("vitinia", "acilia", morning)
+        d.start(Direction.TO_ROMA, ride.first())
+        d.setDirection(Direction.TO_ROMA)
+        val s = d.feed(ride.drop(1).take(10)).last() as GoState.OnTrain
+        assertEquals(Direction.TO_ROMA, s.direction)
+    }
 }

@@ -9,8 +9,11 @@ import java.time.LocalDateTime
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
-/** Una posizione GPS con l'ora in cui è stata presa. Solo in memoria, mai salvata. */
-data class GoSample(val point: GeoPoint, val time: LocalDateTime)
+/**
+ * Una posizione GPS con l'ora in cui è stata presa. Solo in memoria, mai salvata.
+ * [accuracy] = raggio di incertezza in metri dichiarato dal GPS (null = ignoto).
+ */
+data class GoSample(val point: GeoPoint, val time: LocalDateTime, val accuracy: Double? = null)
 
 /** Arrivo stimato a una stazione davanti a te. */
 data class GoArrival(val stationIndex: Int, val station: Station, val time: LocalDateTime)
@@ -26,8 +29,10 @@ sealed interface GoState {
     /** Sei sul treno: dove sei e quando arrivi alle stazioni davanti. */
     data class OnTrain(
         val direction: Direction,
-        /** Il tuo punto sulla linea (metri da Porta San Paolo). */
+        /** Il tuo punto sulla linea (metri da Porta San Paolo), all'ora [fixTime]. */
         val alongMeters: Double,
+        /** Ora dell'ultima posizione usata: da qui si stima dove sei adesso ([GoDetector.estimateAlong]). */
+        val fixTime: LocalDateTime,
         /** Il tuo punto "agganciato" ai binari: per il pallino sulla mappa. */
         val pointOnLine: GeoPoint,
         /** Stazioni davanti, nell'ordine in cui le incontri. Vuota = sei al capolinea. */
@@ -62,6 +67,13 @@ class GoDetector(
     /** Minuti dal capolinea per stazione, per direzione (dall'orario). */
     private val minutesFromTerminus: (Direction) -> IntArray,
     /**
+     * true = Go parte da solo quando riconosce il treno. Nell'app è false
+     * (dal 15/11): sul treno vero il GPS aggiorna a scatti e il riconoscimento
+     * non partiva, quindi Go si avvia col pulsante "Vai" ([start]). Il
+     * riconoscimento resta qui (e nei test) per eventuali usi futuri.
+     */
+    private val autoStart: Boolean = true,
+    /**
      * Può esserci un treno lì, a quell'ora? (indice della stazione più vicina,
      * verso, ora). La sera, passato l'ultimo treno, la strada che corre accanto
      * ai binari sembrerebbe un treno: così sul bus sostitutivo Go non parte.
@@ -80,12 +92,39 @@ class GoDetector(
     private var lastTrainStep: LocalDateTime? = null
     private var stoppedSince: LocalDateTime? = null  // in Go: da quando sei fermo
     private var offLineCount = 0                     // in Go: posizioni di fila lontane dai binari
+    private var startAlong = 0.0                     // in Go avviato a mano: dove hai premuto "Vai"
+    private var directionChecked = true              // in Go avviato a mano: false finché il movimento non conferma la direzione
 
     /** Si riparte da zero, dimenticando anche l'ultima posizione (es. inizio di una simulazione). */
     fun reset() {
         resetDetection()
         last = null
     }
+
+    /**
+     * Pulsante "Vai": sei sul treno (o stai per salirci) verso [direction].
+     * [sample] = la tua posizione adesso. Se poi il treno si muove nel verso
+     * opposto, la direzione si corregge da sola (vedi [updateOnTrain]).
+     */
+    fun start(direction: Direction, sample: GoSample) {
+        resetDetection()
+        val projection = track.project(sample.point)
+        last = Fix(sample, projection)
+        startAlong = projection.alongMeters
+        directionChecked = false
+        state = onTrain(sample.time, projection.alongMeters, direction)
+    }
+
+    /** Cambio di direzione a mano (selettore in Go): stessa posizione, arrivi ricalcolati. */
+    fun setDirection(direction: Direction) {
+        val s = state as? GoState.OnTrain ?: return
+        directionChecked = true  // scelta tua: la correzione automatica non la ribalta
+        if (s.direction == direction) return
+        state = onTrain(s.fixTime, s.alongMeters, direction)
+    }
+
+    /** Esci da Go (pulsante X): si torna spenti, ricordando l'ultima posizione. */
+    fun stop() = resetDetection()
 
     /** Da chiamare a ogni nuova posizione GPS. Restituisce il nuovo stato. */
     fun update(sample: GoSample): GoState {
@@ -114,9 +153,10 @@ class GoDetector(
             // Si chiede all'orario solo per i passi che sembrano da treno.
             trainPossible(nearestStation(fix.projection.alongMeters), direction, sample.time)
 
-        when (state) {
-            is GoState.OnTrain -> updateOnTrain(fix, alongSpeed)
-            else -> detect(fix, trainStep, direction)
+        when {
+            state is GoState.OnTrain -> updateOnTrain(fix, alongSpeed)
+            autoStart -> detect(fix, trainStep, direction)
+            // Avvio solo col pulsante: fuori da Go si ricorda solo l'ultima posizione.
         }
         return state
     }
@@ -148,16 +188,31 @@ class GoDetector(
 
     /** Già sul treno: aggiorna posizione e arrivi, o esce da Go. */
     private fun updateOnTrain(fix: Fix, speed: Double?) {
-        val current = state as GoState.OnTrain
+        var current = state as GoState.OnTrain
         val time = fix.sample.time
+        // Incertezza della posizione: quella dichiarata dal GPS, ma mai meno di 20 m.
+        val accuracy = maxOf(fix.sample.accuracy ?: MIN_ACCURACY_M, MIN_ACCURACY_M)
 
         // Lontano dai binari per due posizioni di fila: sei sceso (o eri in auto).
-        if (fix.projection.offsetMeters > OFF_LINE_M) {
+        // Si toglie l'incertezza: una posizione da celle telefoniche "a 300 m,
+        // ± 400 m" può benissimo essere sul treno.
+        if (fix.projection.offsetMeters - accuracy > OFF_LINE_M) {
             offLineCount++
             if (offLineCount >= OFF_LINE_FIXES_TO_EXIT) resetDetection()
             return  // una posizione sola lontana può essere un errore del GPS: si ignora
         }
         offLineCount = 0
+
+        // Avviato col pulsante: la direzione era una scommessa. Se una posizione
+        // precisa mostra che ti sei mosso di parecchio nel verso opposto, si gira.
+        if (!directionChecked && accuracy <= ON_LINE_M) {
+            val moved = fix.projection.alongMeters - startAlong
+            if (abs(moved) >= DIRECTION_CHECK_M) {
+                directionChecked = true
+                val real = if (moved > 0) Direction.TO_OSTIA else Direction.TO_ROMA
+                if (real != current.direction) current = onTrain(time, fix.projection.alongMeters, real)
+            }
+        }
 
         // Fermo da troppo: sei sceso e stai camminando in stazione (o il
         // treno è fermo a lungo). Al capolinea d'arrivo si esce prima.
@@ -173,15 +228,56 @@ class GoDetector(
             stoppedSince = null
         }
 
+        // Dove sei: si parte dalla STIMA (dove dovresti essere andando coi tempi
+        // dell'orario dall'ultima posizione) e la si sposta il minimo necessario
+        // per farla stare dentro l'incertezza della posizione nuova. Con un GPS
+        // preciso vince il GPS; con uno impreciso (in treno capita spesso) si
+        // tiene la stima, finché il GPS non dice chiaramente il contrario.
+        val estimate = estimateAlong(current, time)
+        val corrected = estimate.coerceIn(fix.projection.alongMeters - accuracy, fix.projection.alongMeters + accuracy)
+
         // Il treno non torna indietro: se la posizione arretra è rumore del
         // GPS, e si tiene quella di prima (se no la "prossima fermata" potrebbe
         // sfarfallare avanti e indietro).
         val forward = when (current.direction) {
-            Direction.TO_OSTIA -> fix.projection.alongMeters - current.alongMeters
-            Direction.TO_ROMA -> current.alongMeters - fix.projection.alongMeters
+            Direction.TO_OSTIA -> corrected - current.alongMeters
+            Direction.TO_ROMA -> current.alongMeters - corrected
         }
-        val along = if (forward < 0) current.alongMeters else fix.projection.alongMeters
+        val along = if (forward < 0) current.alongMeters else corrected
         state = onTrain(time, along, current.direction)
+    }
+
+    /**
+     * Dove dovresti essere ADESSO ([now]), anche se il GPS tace da un po':
+     * dall'ultima posizione si va avanti coi tempi dell'orario, ma non oltre
+     * la prossima stazione (lì il treno si ferma: meglio aspettarlo lì che
+     * "passarla" senza saperlo). Serve a muovere il pallino in modo fluido e a
+     * dare un punto di partenza a ogni nuova posizione. null = non sei in Go.
+     */
+    fun estimateAlong(now: LocalDateTime): Double? =
+        (state as? GoState.OnTrain)?.let { estimateAlong(it, now) }
+
+    private fun estimateAlong(s: GoState.OnTrain, now: LocalDateTime): Double {
+        val elapsedMin = (Duration.between(s.fixTime, now).toMillis() / 60_000.0).coerceIn(0.0, MAX_ESTIMATE_MIN)
+        if (elapsedMin == 0.0) return s.alongMeters
+        val minutes = minutesFromTerminus(s.direction)
+        val target = minutesAt(s.alongMeters, minutes) + elapsedMin
+        // La prossima stazione davanti: oltre non si va.
+        val a = track.stationAlong
+        val cap = when (s.direction) {
+            Direction.TO_OSTIA -> a.firstOrNull { it > s.alongMeters + AT_STATION_M } ?: a.last()
+            Direction.TO_ROMA -> a.lastOrNull { it < s.alongMeters - AT_STATION_M } ?: a.first()
+        }
+        if (minutesAt(cap, minutes) <= target) return cap
+        // Tra te e la stazione i minuti crescono con la strada fatta: si cerca
+        // il punto giusto dimezzando l'intervallo (40 passi: precisione al millimetro).
+        var lo = s.alongMeters  // qui i minuti sono ancora meno del necessario
+        var hi = cap            // qui sono già di più
+        repeat(40) {
+            val mid = (lo + hi) / 2
+            if (minutesAt(mid, minutes) < target) lo = mid else hi = mid
+        }
+        return (lo + hi) / 2
     }
 
     /** Indice della stazione più vicina al punto [along] della linea. */
@@ -205,7 +301,7 @@ class GoDetector(
             val secondsToGo = ((minutes[i] - hereMinutes) * 60).roundToLong().coerceAtLeast(0)
             GoArrival(i, stations[i], time.plusSeconds(secondsToGo))
         }
-        return GoState.OnTrain(direction, along, track.pointAt(along), ahead)
+        return GoState.OnTrain(direction, along, time, track.pointAt(along), ahead)
     }
 
     /**
@@ -228,6 +324,7 @@ class GoDetector(
         lastTrainStep = null
         stoppedSince = null
         offLineCount = 0
+        directionChecked = true
     }
 
     companion object {
@@ -257,5 +354,11 @@ class GoDetector(
         const val TERMINUS_RADIUS_M = 200.0
         /** Una stazione entro questa distanza è "dove sei", non "davanti". */
         const val AT_STATION_M = 30.0
+        /** Incertezza minima di una posizione (anche se il GPS dice "5 m"). */
+        const val MIN_ACCURACY_M = 20.0
+        /** Avvio col pulsante: dopo 200 m percorsi si sa davvero in che verso vai. */
+        const val DIRECTION_CHECK_M = 200.0
+        /** La stima va avanti al massimo per 10 minuti senza posizioni nuove. */
+        const val MAX_ESTIMATE_MIN = 10.0
     }
 }

@@ -61,7 +61,6 @@ class StationPrefs(context: Context) {
                     walkLevel = (p[WALK_LEVEL] ?: def.walkLevel).coerceIn(0, 4),
                     bikeLevel = (p[BIKE_LEVEL] ?: def.bikeLevel).coerceIn(0, 4),
                     fadeMissed = p[FADE_MISSED] ?: def.fadeMissed,
-                    goOn = p[GO_ON] ?: def.goOn,
                 )
             },
         )
@@ -100,7 +99,6 @@ class StationPrefs(context: Context) {
             it[WALK_LEVEL] = s.walkLevel
             it[BIKE_LEVEL] = s.bikeLevel
             it[FADE_MISSED] = s.fadeMissed
-            it[GO_ON] = s.goOn
         }
     }
 
@@ -128,6 +126,5 @@ class StationPrefs(context: Context) {
         val WALK_LEVEL = intPreferencesKey("walk_level")
         val BIKE_LEVEL = intPreferencesKey("bike_level")
         val FADE_MISSED = booleanPreferencesKey("fade_missed")
-        val GO_ON = booleanPreferencesKey("go_on")
     }
 }

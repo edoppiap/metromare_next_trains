@@ -69,6 +69,9 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -108,6 +111,10 @@ fun MainScreen(
     onMenu: () -> Unit,
     /** Pulsante X: esci dalla modalità Go. */
     onExitGo: () -> Unit = {},
+    /** Pulsante "Vai": entra in modalità Go. */
+    onStartGo: () -> Unit = {},
+    /** Selettore Ostia | Roma in Go: corregge la direzione. */
+    onGoDirection: (Direction) -> Unit = {},
     /** Tocco sulla scheda di una fermata in Go: la fissa nella striscia. */
     onPinStop: (String) -> Unit = {},
     /** C'è una pagina sopra (giornata, menu): conta il suo sfondo per la barra di stato. */
@@ -132,9 +139,8 @@ fun MainScreen(
         circlesByTap = null
         if (!fullMap) circlesHeldBack = false
     }
-    // Modalità Go attiva (sul treno, non solo "sto riconoscendo"): i cerchi
-    // a piedi/in bici non servono, al loro posto in alto c'è la X.
-    val goActive = state.go?.recognizing == false
+    // Modalità Go attiva: i cerchi a piedi/in bici non servono, al loro posto in alto c'è la X.
+    val goActive = state.go != null
     // Inquadratura "tutta la linea": i cerchi lì non servono (deciso 13/11). Tornano
     // in "tu" e "tu + stazione". Cambiando inquadratura si torna all'automatico.
     var lineFraming by remember { mutableStateOf(true) }  // la mappa nasce sulla linea intera
@@ -267,6 +273,7 @@ fun MainScreen(
                     onTravelMode = onTravelMode,
                     goActive = goActive,
                     onExitGo = onExitGo,
+                    onStartGo = onStartGo,
                 )
             },
             // La striscia compare solo a mappa piena: mentre la tendina scende è la
@@ -289,7 +296,7 @@ fun MainScreen(
         ) {
             val stripCard = state.primaryCards.firstOrNull() ?: state.otherCards.firstOrNull()
             SheetContent(
-                state, listState, onOpenDay, onModeChange, onToggleFavorite, onPinStop,
+                state, listState, onOpenDay, onModeChange, onToggleFavorite, onPinStop, onGoDirection,
                 collapse = { sheet.collapseProgress },
                 // A tendina non tutta su, la parte bassa della lista è sotto il bordo
                 // dello schermo: tanto spazio in più in fondo, così anche le ultime
@@ -327,6 +334,7 @@ private fun MapLayer(
     onTravelMode: (TravelMode) -> Unit,
     goActive: Boolean,
     onExitGo: () -> Unit,
+    onStartGo: () -> Unit,
 ) {
     // Velocità: creare la mappa Google costa centinaia di ms. Per non
     // ritardare gli orari, al primo fotogramma c'è solo lo sfondo;
@@ -390,6 +398,39 @@ private fun MapLayer(
                 }
             }
         }
+        // Pulsante "Vai" in basso a sinistra, appena sopra la tendina (a destra
+        // c'è "centra"): compare solo vicino a una stazione o ai binari.
+        androidx.compose.animation.AnimatedVisibility(
+            visible = state.canGo,
+            enter = fadeIn() + androidx.compose.animation.scaleIn(initialScale = 0.6f),
+            exit = fadeOut() + androidx.compose.animation.scaleOut(targetScale = 0.6f),
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .offset { androidx.compose.ui.unit.IntOffset(0, -controlsLift()) }
+                .padding(start = 12.dp, bottom = 12.dp),
+        ) {
+            GoButton(onStartGo)
+        }
+    }
+}
+
+/**
+ * Pulsante tondo "Vai": avvia la modalità Go (sei sul treno, o stai per
+ * salirci). Blu della linea con la scritta bianca, un po' più grande degli
+ * altri pulsanti della mappa perché è l'azione principale.
+ */
+@Composable
+private fun GoButton(onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(60.dp)
+            .shadow(6.dp, CircleShape)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primary)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("Vai", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
     }
 }
 
@@ -502,8 +543,7 @@ private sealed interface SheetItem {
         override val key = (if (primary) "p_" else "o_") + card.stationId
     }
     // Modalità Go
-    data object GoRecognizing : SheetItem { override val key = "go_recognizing" }
-    data class GoHeader(val directionTitle: String, val showHint: Boolean, val showNextLabel: Boolean) : SheetItem {
+    data class GoHeader(val direction: Direction, val showHint: Boolean, val showNextLabel: Boolean) : SheetItem {
         override val key = "go_header"
     }
     data object GoAheadHeader : SheetItem { override val key = "go_ahead_header" }
@@ -517,11 +557,11 @@ private sealed interface SheetItem {
 private fun sheetItems(state: MainUiState): List<SheetItem> = buildList {
     val go = state.go
     // In treno: solo le fermate davanti, al posto di tutte le schede.
-    if (go != null && !go.recognizing) {
+    if (go != null) {
         val pinned = go.stops.firstOrNull { it.pinned }
         val next = go.stops.firstOrNull()
         val first = pinned ?: next
-        add(SheetItem.GoHeader(go.directionTitle, showHint = pinned == null, showNextLabel = first == next && pinned == null))
+        add(SheetItem.GoHeader(go.direction, showHint = pinned == null, showNextLabel = first == next && pinned == null))
         // La fermata fissata va "in primo piano", in cima; le altre sotto, in ordine.
         // Stessa chiave della scheda: così sale in cima scivolando invece di sparire e ricomparire.
         if (pinned != null) {
@@ -533,8 +573,6 @@ private fun sheetItems(state: MainUiState): List<SheetItem> = buildList {
         }
         return@buildList
     }
-    // Sembra un treno: una riga in cima, le schede normali restano sotto.
-    if (go != null) add(SheetItem.GoRecognizing)
     add(SheetItem.PrimaryHeader)
     if (state.primaryCards.isEmpty()) add(SheetItem.FavoritesHint)
     state.primaryCards.forEach { add(SheetItem.Card(it, primary = true)) }
@@ -550,6 +588,7 @@ private fun SheetContent(
     onModeChange: (PrimaryMode) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onPinStop: (String) -> Unit,
+    onGoDirection: (Direction) -> Unit,
     /** Quanto è scesa la tendina verso la mappa piena (0–1): la prima scheda si trasforma. */
     collapse: () -> Float = { 0f },
     /** Parte della lista nascosta sotto il bordo dello schermo: diventa spazio in più in fondo. */
@@ -558,7 +597,7 @@ private fun SheetContent(
     stripDirection: Direction? = null,
 ) {
     // Quando cambia la modalità (o si entra/esce da Go), torna in cima alla lista.
-    val goActive = state.go?.recognizing == false
+    val goActive = state.go != null
     LaunchedEffect(state.mode, goActive) { listState.scrollToItem(0) }
     // Fissando una fermata in Go, la lista torna in cima: lì c'è la scheda appena fissata.
     val pinnedId = state.go?.stops?.firstOrNull { it.pinned }?.stationId
@@ -602,8 +641,7 @@ private fun SheetContent(
                     morph = if (index == morphIndex) collapse else null,
                     keptDirection = stripDirection,
                 )
-                SheetItem.GoRecognizing -> GoRecognizingRow()
-                is SheetItem.GoHeader -> GoHeader(item.directionTitle, item.showHint, item.showNextLabel, collapse)
+                is SheetItem.GoHeader -> GoHeader(item.direction, onGoDirection, item.showHint, item.showNextLabel, collapse)
                 SheetItem.GoAheadHeader -> GoAheadHeader()
                 is SheetItem.GoStop -> GoStopCard(
                     item.stop,
@@ -619,33 +657,20 @@ private fun SheetContent(
 
 // ---- Modalità Go ----
 
-/** "⟳ Sei in treno? Sto riconoscendo la corsa…": compare per 15–30 s prima di Go. */
-@Composable
-private fun GoRecognizingRow() {
-    SheetCard {
-        Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            androidx.compose.material3.CircularProgressIndicator(
-                modifier = Modifier.size(18.dp),
-                strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                "Sei in treno? Sto riconoscendo la corsa…",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }
-    }
-}
-
 /**
- * In treno  [Verso Ostia]
+ * In treno  [Ostia | Roma]
  * Arrivi stimati da dove sei, coi tempi dell'orario programmato.
+ * La direzione la sceglie "Vai" (la più probabile); il selettore serve a
+ * correggerla, e se il treno va dall'altra parte si gira da sola.
  */
 @Composable
-private fun GoHeader(directionTitle: String, showHint: Boolean, showNextLabel: Boolean, collapse: () -> Float) {
+private fun GoHeader(
+    direction: Direction,
+    onDirection: (Direction) -> Unit,
+    showHint: Boolean,
+    showNextLabel: Boolean,
+    collapse: () -> Float,
+) {
     val onFondo = LocalOnBackground.current
     Column(Modifier.padding(start = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -656,8 +681,12 @@ private fun GoHeader(directionTitle: String, showHint: Boolean, showNextLabel: B
                 color = onFondo.text,
             )
             Spacer(Modifier.width(10.dp))
-            // Pillola posata sul fondo: nel chiaro si inverte (bianca, testo blu).
-            DirectionPill(directionTitle, background = onFondo.pill, textColor = onFondo.onPill)
+            // Selettori di direzione sempre Ostia | Roma (geografico), come altrove.
+            SegmentedToggle(
+                options = listOf(Direction.TO_OSTIA to "Ostia", Direction.TO_ROMA to "Roma"),
+                selected = direction,
+                onSelect = onDirection,
+            )
             Spacer(Modifier.weight(1f))
             // A mappa piena "Prossima fermata" sta qui (nella scheda non c'è più posto).
             if (showNextLabel) {

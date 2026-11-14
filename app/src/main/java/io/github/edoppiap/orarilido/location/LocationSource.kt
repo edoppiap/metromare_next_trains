@@ -43,9 +43,9 @@ class LocationSource(context: Context) {
         }
 
     /**
-     * Flow di posizioni: prima l'ultima nota, poi una ogni ~10 s o ogni 15 m percorsi.
-     * Con [fast] (modalità Go): una ogni 5 s, anche da fermo, perché serve
-     * seguire il treno da vicino e capire quando si ferma.
+     * Flow di posizioni: prima l'ultima nota, poi una ogni ~5 s o ogni 10 m percorsi.
+     * Con [fast] (modalità Go): una al secondo (il massimo del GPS), anche da
+     * fermo: in treno il segnale va e viene, e ogni posizione buona conta.
      */
     @SuppressLint("MissingPermission")  // chi chiama controlla prima hasPermission()
     fun updates(fast: Boolean = false): Flow<LocationFix> = callbackFlow {
@@ -56,10 +56,10 @@ class LocationSource(context: Context) {
         client.lastLocation.addOnSuccessListener { last -> if (last != null) send(last) }
 
         val request = if (fast) {
-            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5_000).build()
+            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1_000).build()
         } else {
-            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10_000)
-                .setMinUpdateDistanceMeters(15f)
+            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5_000)
+                .setMinUpdateDistanceMeters(10f)
                 .build()
         }
         val callback = object : LocationCallback() {
