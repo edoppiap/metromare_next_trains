@@ -1,0 +1,25 @@
+{
+  "updated": "2026-11-15T02:08",
+  "alerts": [
+    {
+      "id": 5278,
+      "modified": "2026-11-13T15:14:58",
+      "level": "urgente",
+      "title": "SCIOPERO Venerdì 20 novembre",
+      "link": "https://cotralspa.it/avvisi/sciopero/",
+      "end": "2026-11-20T23:59:00",
+      "trainStrikeBands": [
+        "08:30-16:59",
+        "20:00-23:59"
+      ]
+    },
+    {
+      "id": 5935,
+      "modified": "2026-11-13T15:00:38",
+      "level": "notizia",
+      "title": "METROMARE – frequenza a 15 minuti da lunedì 9 novembre",
+      "link": "https://cotralspa.it/avvisi/metromare-frequenza-a-15-minuti-da-lunedi-9-novembre/",
+      "end": null
+    }
+  ]
+}
