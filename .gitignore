@@ -27,3 +27,8 @@ CLAUDE.md
 
 # Copie di pagine ufficiali (Cotral, Astral): solo riferimento locale
 fonti/
+
+# File compilati di Python e impostazioni locali di Android Studio
+__pycache__/
+*.pyc
+/.idea/
