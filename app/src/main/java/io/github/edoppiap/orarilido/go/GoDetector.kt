@@ -123,6 +123,24 @@ class GoDetector(
         state = onTrain(s.fixTime, s.alongMeters, direction)
     }
 
+    /**
+     * Viaggio sicuramente finito? Si guarda quanto tempo è passato dall'ultima
+     * posizione (es. app in background, schermo spento: il GPS è spento): se è
+     * più di quanto mancava al capolinea, più [STALE_MARGIN_MIN] di margine per
+     * i ritardi, Go si chiude subito, senza aspettare il GPS. Da chiamare
+     * prima di disegnare (alla riapertura dell'app). true = chiusa ora.
+     */
+    fun expireIfStale(now: LocalDateTime): Boolean {
+        val s = state as? GoState.OnTrain ?: return false
+        val minutes = minutesFromTerminus(s.direction)
+        val terminus = if (s.direction == Direction.TO_OSTIA) minutes.last() else minutes.first()
+        val leftMin = terminus - minutesAt(s.alongMeters, minutes)  // minuti al capolinea da lì
+        val awayMin = Duration.between(s.fixTime, now).seconds / 60.0
+        if (awayMin <= leftMin + STALE_MARGIN_MIN) return false
+        resetDetection()
+        return true
+    }
+
     /** Esci da Go (pulsante X): si torna spenti, ricordando l'ultima posizione. */
     fun stop() = resetDetection()
 
@@ -358,6 +376,8 @@ class GoDetector(
         const val MIN_ACCURACY_M = 20.0
         /** Avvio col pulsante: dopo 200 m percorsi si sa davvero in che verso vai. */
         const val DIRECTION_CHECK_M = 200.0
+        /** Margine per i ritardi prima di dare per finito un viaggio senza posizioni. */
+        const val STALE_MARGIN_MIN = 10.0
         /** La stima va avanti al massimo per 10 minuti senza posizioni nuove. */
         const val MAX_ESTIMATE_MIN = 10.0
     }

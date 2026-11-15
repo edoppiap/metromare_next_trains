@@ -296,6 +296,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         // Modalità Go: se sei sul treno, la mappa ti mostra "agganciato" ai binari,
         // con le fermate davanti evidenziate e la prossima come riferimento.
+        // Riaprendo l'app dopo tanto (GPS spento in background) il viaggio può
+        // essere già finito: in quel caso Go si chiude prima di disegnare.
+        if (detector?.expireIfStale(now) == true) pinnedStopId = null
         val onTrain = detector?.state as? GoState.OnTrain
         // Inizio di un viaggio: si fissa da sola la fermata scelta l'ultima volta
         // in questa direzione (se è ancora davanti a te).

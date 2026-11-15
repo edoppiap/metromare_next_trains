@@ -399,4 +399,15 @@ class GoDetectorTest {
         val s = d.feed(ride.drop(1).take(10)).last() as GoState.OnTrain
         assertEquals(Direction.TO_ROMA, s.direction)
     }
+
+    @Test
+    fun `riaperta dopo che il viaggio era sicuramente finito - Go si chiude`() {
+        val d = manualDetector()
+        // Vitinia verso Ostia: al capolinea mancano 24 minuti (13 -> 37).
+        d.start(Direction.TO_OSTIA, GoSample(pointNear(along("vitinia")), morning))
+        assertEquals(false, d.expireIfStale(morning.plusMinutes(30)))  // treno in ritardo: resta
+        assertTrue(d.state is GoState.OnTrain)
+        assertEquals(true, d.expireIfStale(morning.plusMinutes(40)))
+        assertEquals(GoState.Off, d.state)
+    }
 }
