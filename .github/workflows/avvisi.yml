@@ -1,0 +1,56 @@
+# Avvisi Cotral: ogni 30 minuti GitHub lancia tools/cotral_alerts.py e, se
+# gli avvisi sono cambiati, salva avvisi.json nel ramo "dati" (separato da
+# main, cosi' i commit automatici non si mescolano col codice).
+# L'app scarichera':
+#   https://raw.githubusercontent.com/edoppiap/metromare_next_trains/dati/avvisi.json
+name: Avvisi Cotral
+
+on:
+  schedule:
+    # Orari in UTC; minuti 7 e 37 per evitare l'ora piena, quando GitHub e'
+    # piu' carico e ritarda di piu'. Il ritardo di 5-15 minuti e' normale.
+    - cron: "7,37 * * * *"
+  workflow_dispatch:        # pulsante "Run workflow" per lanciarlo a mano
+
+permissions:
+  contents: write           # serve per salvare nel ramo "dati"
+
+concurrency: avvisi         # mai due lanci insieme
+
+jobs:
+  avvisi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Codice (lo script)
+        uses: actions/checkout@v4
+
+      - name: Ramo dati
+        uses: actions/checkout@v4
+        with:
+          ref: dati
+          path: dati
+
+      - name: Leggi gli avvisi Cotral
+        env:
+          TZ: Europe/Rome   # le date di Cotral sono in ora di Roma
+        run: python3 -I tools/cotral_alerts.py --json dati/avvisi.json
+
+      - name: Salva se cambiato (o una volta al mese, come segno di vita)
+        working-directory: dati
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          last=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          # 25 giorni: GitHub sospende i lanci automatici dopo 60 giorni
+          # senza attivita' nel repository.
+          if ! git diff --quiet; then
+            git commit -am "Avvisi aggiornati"
+            git push
+          elif [ $((now - last)) -gt $((25 * 24 * 3600)) ]; then
+            git commit --allow-empty -m "Segno di vita mensile"
+            git push
+          else
+            echo "Nessun cambiamento"
+          fi

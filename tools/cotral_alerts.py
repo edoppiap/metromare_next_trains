@@ -2,6 +2,11 @@
 
 Uso:  py -I tools/cotral_alerts.py            (stampa cosa mostrerebbe l'app)
       py -I tools/cotral_alerts.py --json F   (scrive anche il file avvisi.json)
+      --debug                                 (mostra anche gli scartati)
+
+Su GitHub gira da solo ogni 30 minuti (.github/workflows/avvisi.yml) e salva
+avvisi.json nel ramo "dati". Le date di Cotral sono in ora di Roma: il
+workflow imposta TZ=Europe/Rome, perche' i server di GitHub sono in UTC.
 
 Fonte: https://cotralspa.it/wp-json/wp/v2/alerts (elenco: titolo, date, link;
 il testo NON c'e', quindi per gli avvisi che passano il filtro si apre la
@@ -224,10 +229,22 @@ def main():
 
     if "--json" in sys.argv:
         path = sys.argv[sys.argv.index("--json") + 1]
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({"generated": now.isoformat(timespec="minutes"), "alerts": out},
-                      f, ensure_ascii=False, indent=2)
-        print(f"Scritto {path}")
+        # Si riscrive il file SOLO se gli avvisi sono cambiati: cosi' su
+        # GitHub c'e' un commit solo quando c'e' davvero una novita'.
+        # "updated" = quando sono cambiati l'ultima volta (ora di Roma).
+        try:
+            with open(path, encoding="utf-8") as f:
+                old = json.load(f).get("alerts")
+        except (OSError, ValueError):
+            old = None
+        if old == out:
+            print(f"{path}: nessun cambiamento")
+        else:
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                json.dump({"updated": now.isoformat(timespec="minutes"), "alerts": out},
+                          f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            print(f"Scritto {path}")
 
 
 if __name__ == "__main__":
