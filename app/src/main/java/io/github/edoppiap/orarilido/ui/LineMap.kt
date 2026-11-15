@@ -507,7 +507,10 @@ fun LineMap(
         lastGoKey = goKey
         val current = framing
         if (mapLoaded && (current == RecenterTarget.USER || current == RecenterTarget.USER_AND_STATION)) {
-            applyFraming(current, 500)
+            // In Go la posizione cambia ogni secondo: un movimento appena più
+            // lungo (1,1 s) viene raggiunto dal successivo prima di rallentare,
+            // così la mappa scorre invece di andare a scatti (muovi, fermo, muovi).
+            applyFraming(current, if (goActive) 1100 else 500)
         }
     }
 
@@ -776,33 +779,7 @@ fun LineMap(
                         WalkLabel("$emoji $minutes min", night)
                     }
                 }
-                // Cono: dove punta il telefono. Marker "flat" = sta disteso sulla
-                // mappa, quindi "rotation" è in gradi dal nord e gira con la mappa.
-                heading?.let { degrees ->
-                    MarkerComposable(
-                        keys = arrayOf<Any>("cone", dark),
-                        state = rememberUpdatedMarkerState(center),
-                        anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
-                        flat = true,
-                        rotation = degrees,
-                        zIndex = 2.5f,  // sotto il pallino, sopra le stazioni
-                        // Il cono è più grande del pallino: un tocco "quasi sul pallino"
-                        // cade qui. Stesso effetto del pallino, e true = Google non
-                        // centra la mappa (comportamento predefinito dei marker).
-                        onClick = { onUserClick(); true },
-                    ) {
-                        HeadingCone(night)
-                    }
-                }
-                MarkerComposable(
-                    keys = arrayOf<Any>("user", dark),
-                    state = rememberUpdatedMarkerState(center),
-                    anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
-                    zIndex = 3f,
-                    onClick = { onUserClick(); true },  // true = niente etichetta
-                ) {
-                    UserDot(night)
-                }
+                UserMarkers(user, heading, night, dark, onUserClick)
             }
         }
         // Bussola: compare solo se la mappa è ruotata; tocco = nord in alto.
@@ -847,6 +824,85 @@ fun LineMap(
         )
     }
 }
+
+/**
+ * Pallino dell'utente e cono di orientamento. Il pallino non salta da una
+ * posizione all'altra: SCIVOLA in un secondo (come in Google Maps), così in
+ * Go, con una posizione al secondo, si muove in modo continuo sui binari.
+ * È una funzione a parte perché l'animazione ridisegna solo lei, non tutta la mappa.
+ */
+@Composable
+private fun UserMarkers(
+    user: GeoPoint,
+    heading: Float?,
+    night: Boolean,
+    dark: Boolean,
+    onUserClick: () -> Unit,
+) {
+    val glided = rememberGlidingPoint(user)
+    val center = LatLng(glided.lat, glided.lon)
+    // Cono: dove punta il telefono. Marker "flat" = sta disteso sulla
+    // mappa, quindi "rotation" è in gradi dal nord e gira con la mappa.
+    heading?.let { degrees ->
+        MarkerComposable(
+            keys = arrayOf<Any>("cone", dark),
+            state = rememberUpdatedMarkerState(center),
+            anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
+            flat = true,
+            rotation = degrees,
+            zIndex = 2.5f,  // sotto il pallino, sopra le stazioni
+            // Il cono è più grande del pallino: un tocco "quasi sul pallino"
+            // cade qui. Stesso effetto del pallino, e true = Google non
+            // centra la mappa (comportamento predefinito dei marker).
+            onClick = { onUserClick(); true },
+        ) {
+            HeadingCone(night)
+        }
+    }
+    MarkerComposable(
+        keys = arrayOf<Any>("user", dark),
+        state = rememberUpdatedMarkerState(center),
+        anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
+        zIndex = 3f,
+        onClick = { onUserClick(); true },  // true = niente etichetta
+    ) {
+        UserDot(night)
+    }
+}
+
+/**
+ * Il punto mostrato mentre scivola verso [target]: a ogni posizione nuova
+ * riparte da dove è ADESSO e ci arriva in [GLIDE_MS], a velocità costante.
+ * Salti grandi (prima posizione, GPS ritrovato) non scivolano: il punto ci va subito.
+ */
+@Composable
+private fun rememberGlidingPoint(target: GeoPoint): GeoPoint {
+    var from by remember { mutableStateOf(target) }
+    var to by remember { mutableStateOf(target) }
+    val progress = remember { Animatable(1f) }
+    fun shown() = GeoPoint(
+        from.lat + (to.lat - from.lat) * progress.value,
+        from.lon + (to.lon - from.lon) * progress.value,
+    )
+    LaunchedEffect(target) {
+        val start = shown()
+        from = start
+        to = target
+        if (Geo.distanceMeters(start, target) > GLIDE_MAX_M) {
+            progress.snapTo(1f)
+            from = target
+            return@LaunchedEffect
+        }
+        progress.snapTo(0f)
+        progress.animateTo(1f, tween(GLIDE_MS, easing = androidx.compose.animation.core.LinearEasing))
+    }
+    return shown()
+}
+
+/** Durata della scivolata del pallino: come l'intervallo del GPS in Go (1 s). */
+private const val GLIDE_MS = 1000
+/** Oltre questa distanza il pallino non scivola, salta. */
+private const val GLIDE_MAX_M = 500.0
 
 @Composable
 private fun StationDot(selected: Boolean, night: Boolean) {

@@ -193,6 +193,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var detector: GoDetector? = null
     /** Il tracciato come "righello" (serve anche al simulatore). */
     private var track: LineTrack? = null
+    /** Build di prova: "Vai" sempre visibile, per vederlo anche da casa. */
+    private val debugBuild = (app.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
     /** Ultima posizione vera dal GPS (solo in memoria): serve al pulsante "Vai". */
     private var lastSample: GoSample? = null
     /** Fermata fissata toccando la sua scheda (la striscia mostra quella). */
@@ -336,7 +339,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             nearestStation = onTrain?.ahead?.firstOrNull()?.station ?: focus,
             travelMode = travelMode,
             go = go,
-            canGo = go == null && user != null && nearLine(user),
+            canGo = go == null && (debugBuild || (user != null && nearLine(user))),
             simulating = simulation != null,
             route = route,
             settings = settings,
@@ -488,6 +491,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val d = detector ?: return
         val t = track ?: return
         val sample = lastSample ?: return
+        // Lontano dalla linea non fa niente (succede solo nella build di prova,
+        // dove il pulsante si vede sempre).
+        if (!nearLine(sample.point)) return
         val now = now()
         val nearest = t.stationAlong.indices.minBy { abs(t.stationAlong[it] - t.project(sample.point).alongMeters) }
         d.start(likelyDirection(p, p.stations[nearest].id, now), sample.copy(time = now))
