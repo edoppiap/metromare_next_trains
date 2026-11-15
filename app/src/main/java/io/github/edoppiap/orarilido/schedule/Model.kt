@@ -42,6 +42,12 @@ data class Departure(
     val time: LocalDateTime,
     /** true = corsa non confermata dalla fonte ufficiale: la UI mostra un "?" rosso. */
     val unconfirmed: Boolean = false,
+    /**
+     * Quando la corsa parte dalla sua origine (di solito il capolinea; per le
+     * corse in più, Acilia). Serve nei giorni di sciopero: conta la partenza,
+     * non il passaggio qui. null = uguale a [time].
+     */
+    val origin: LocalDateTime? = null,
 )
 
 /**

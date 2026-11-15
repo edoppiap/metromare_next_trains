@@ -6,6 +6,15 @@ import io.github.edoppiap.orarilido.ui.theme.LocalOnBackground
 import io.github.edoppiap.orarilido.ui.theme.LocalDarkTheme
 import io.github.edoppiap.orarilido.ui.theme.MapPlaceholder
 import io.github.edoppiap.orarilido.ui.theme.BackgroundDark
+import io.github.edoppiap.orarilido.ui.theme.AlertAmber
+import io.github.edoppiap.orarilido.ui.theme.AlertAmberDark
+import io.github.edoppiap.orarilido.ui.theme.AlertInkDark
+import io.github.edoppiap.orarilido.ui.theme.AlertMuted
+import io.github.edoppiap.orarilido.ui.theme.AlertMutedDark
+import io.github.edoppiap.orarilido.ui.theme.AlertPale
+import io.github.edoppiap.orarilido.ui.theme.AlertPaleDark
+import io.github.edoppiap.orarilido.ui.theme.Ink
+import io.github.edoppiap.orarilido.alerts.StrikeDay
 import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.SideEffect
@@ -572,6 +581,8 @@ private const val HALF_FRACTION = 0.55f
 
 private sealed interface SheetItem {
     val key: String
+    /** Giorno di sciopero: riga crema in cima (a mappa piena si chiude come le intestazioni). */
+    data class Strike(val strike: StrikeDay) : SheetItem { override val key = "strike" }
     data object PrimaryHeader : SheetItem { override val key = "hdr_primary" }
     data object FavoritesHint : SheetItem { override val key = "hint" }
     data object OthersHeader : SheetItem { override val key = "hdr_others" }
@@ -609,6 +620,7 @@ private fun sheetItems(state: MainUiState): List<SheetItem> = buildList {
         }
         return@buildList
     }
+    state.strike?.let { add(SheetItem.Strike(it)) }
     add(SheetItem.PrimaryHeader)
     if (state.primaryCards.isEmpty()) add(SheetItem.FavoritesHint)
     state.primaryCards.forEach { add(SheetItem.Card(it, primary = true)) }
@@ -667,6 +679,7 @@ private fun SheetContent(
             // In Go le schede scivolano al nuovo posto quando ne fissi una.
             Box((if (isGo) Modifier.animateItem() else Modifier).then(role).padding(bottom = 10.dp)) {
             when (item) {
+                is SheetItem.Strike -> StrikeRow(item.strike)
                 SheetItem.PrimaryHeader -> PrimaryHeader(state.mode, onModeChange)
                 SheetItem.FavoritesHint -> FavoritesHint()
                 SheetItem.OthersHeader -> OthersHeader(state.validFrom)
@@ -688,6 +701,43 @@ private fun SheetContent(
             }
             }
         }
+    }
+}
+
+/**
+ * Sciopero oggi · treni a rischio 08:30–16:59 e 20:00–23:59      ↗
+ * ● = treno a rischio, potrebbe non passare
+ * Stessi colori dell'avviso nel menu (crema, pallino ambra). Tocco = avviso Cotral.
+ */
+@Composable
+private fun StrikeRow(strike: StrikeDay) {
+    val dark = LocalDarkTheme.current
+    val bg = if (dark) AlertPaleDark else AlertPale
+    val ink = if (dark) AlertInkDark else Ink
+    val muted = if (dark) AlertMutedDark else AlertMuted
+    val dot = if (dark) AlertAmberDark else AlertAmber
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(bg)
+            .clickable { runCatching { uriHandler.openUri(strike.link) } }
+            .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            Modifier
+                .padding(top = 5.dp, end = 10.dp)
+                .size(9.dp)
+                .clip(RoundedCornerShape(50))
+                .background(dot),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(strike.title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = ink)
+            strike.legend?.let { Text(it, fontSize = 12.sp, color = muted, modifier = Modifier.padding(top = 2.dp)) }
+        }
+        Text("↗", fontSize = 15.sp, color = muted, modifier = Modifier.padding(start = 8.dp))
     }
 }
 
@@ -1127,7 +1177,19 @@ private fun RowScope.DepartureCells(
                     maxLines = 1,
                 )
             }
-            Text(clockText(row), fontSize = 12.sp, color = colors.onSurfaceVariant, maxLines = 1)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(clockText(row), fontSize = 12.sp, color = colors.onSurfaceVariant, maxLines = 1)
+                // Giorno di sciopero: treno a rischio (vedi StrikeRow). Compare in dissolvenza.
+                androidx.compose.animation.AnimatedVisibility(row.atRisk, enter = fadeIn(), exit = fadeOut()) {
+                    Box(
+                        Modifier
+                            .padding(start = 4.dp)
+                            .size(7.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(if (LocalDarkTheme.current) AlertAmberDark else AlertAmber),
+                    )
+                }
+            }
         }
     }
 }

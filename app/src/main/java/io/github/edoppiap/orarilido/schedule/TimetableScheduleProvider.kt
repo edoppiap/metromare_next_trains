@@ -68,7 +68,12 @@ class TimetableScheduleProvider(private val timetable: Timetable) : ScheduleProv
             .map { trip ->
                 val minuteOfServiceDay =
                     trip.departureMinute + minutes[stationIndex] - minutes[trip.originIndex]
-                Departure(serviceDate.atStartOfDay().plusMinutes(minuteOfServiceDay.toLong()), trip.unconfirmed)
+                val start = serviceDate.atStartOfDay()
+                Departure(
+                    start.plusMinutes(minuteOfServiceDay.toLong()),
+                    trip.unconfirmed,
+                    origin = start.plusMinutes(trip.departureMinute.toLong()),
+                )
             }
             .sortedBy { it.time }  // le corse aggiuntive sono in coda alla lista: riordiniamo
     }

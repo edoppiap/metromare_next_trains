@@ -86,7 +86,7 @@ class AlertsViewModel(app: Application) : AndroidViewModel(app) {
     /** Menu aperto: gli avvisi urgenti di adesso sono "visti", il pallino si spegne. */
     fun onMenuOpened() {
         if (!loaded) return
-        val keys = AlertRules.keysToMarkSeen(file, LocalDateTime.now())
+        val keys = AlertRules.keysToMarkSeen(file, now())
         if (keys.all { it in seen }) return
         seen = seen + keys
         save()
@@ -95,14 +95,17 @@ class AlertsViewModel(app: Application) : AndroidViewModel(app) {
 
     /** X su un avviso urgente: sparisce dalla cima del menu (resta nelle Notizie). */
     fun dismiss(alert: Alert) {
-        dismissed = dismissed + AlertRules.key(alert, LocalDateTime.now())
+        dismissed = dismissed + AlertRules.key(alert, now())
         save()
         recompute()
     }
 
     private fun recompute() {
-        _view.value = AlertRules.view(file, LocalDateTime.now(), seen, dismissed)
+        _view.value = AlertRules.view(file, now(), seen, dismissed)
     }
+
+    /** Ora di Roma (le date di Cotral sono in ora di Roma), come in MainViewModel. */
+    private fun now(): LocalDateTime = LocalDateTime.now(java.time.ZoneId.of("Europe/Rome"))
 
     private fun save() {
         val s = seen

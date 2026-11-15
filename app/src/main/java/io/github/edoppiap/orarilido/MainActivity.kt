@@ -81,6 +81,8 @@ class MainActivity : ComponentActivity() {
             OrariTheme(darkTheme = dark) {
                 val day by viewModel.day.collectAsState()
                 val alerts by alertsViewModel.view.collectAsState()
+                // Sciopero di oggi: gli orari lo usano per la riga in cima e i pallini.
+                androidx.compose.runtime.LaunchedEffect(alerts.strike) { viewModel.setStrike(alerts.strike) }
                 // Pagina del menu aperta (null = chiuso). "Saveable": sopravvive alla rotazione.
                 var infoPage by rememberSaveable { mutableStateOf<InfoPage?>(null) }
                 // Pagina "Bus sostitutivi" aperta dalla giornata (non dal menu).

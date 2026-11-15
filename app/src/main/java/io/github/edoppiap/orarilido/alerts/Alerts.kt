@@ -2,7 +2,9 @@ package io.github.edoppiap.orarilido.alerts
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 /*
@@ -74,7 +76,48 @@ data class AlertsView(
     val all: List<Alert> = emptyList(),
     /** Pallino rosso sull'icona ☰. */
     val badge: Boolean = false,
+    /** Sciopero OGGI (riga in cima alla tendina, pallino sui treni a rischio); null = niente. */
+    val strike: StrikeDay? = null,
 )
+
+/**
+ * Giorno di sciopero dei treni. [bands] = fasce in cui i treni sono in
+ * sciopero (vuota se lo script non è riuscito a leggerle: allora c'è solo la
+ * riga "Sciopero oggi", senza pallini sui treni).
+ */
+data class StrikeDay(
+    val date: LocalDate,
+    val bands: List<Pair<LocalTime, LocalTime>>,
+    val link: String,
+    val end: LocalDateTime,
+) {
+    /**
+     * Treno a rischio = parte DALLA SUA ORIGINE (di solito il capolinea)
+     * durante una fascia di sciopero. Di solito le corse partite prima
+     * dell'inizio arrivano a destinazione: il treno delle 08:25 da Porta San
+     * Paolo che passa ad Acilia alle 08:46 non è a rischio. Nell'app si legge
+     * solo "potrebbe non passare": non è una certezza in nessun senso.
+     */
+    fun atRisk(originDeparture: LocalDateTime): Boolean {
+        if (originDeparture.toLocalDate() != date) return false
+        val t = originDeparture.toLocalTime()
+        return bands.any { (from, to) -> !t.isBefore(from) && !t.isAfter(to) }
+    }
+
+    /** "Sciopero oggi · treni a rischio 08:30–16:59 e 20:00–23:59" */
+    val title: String
+        get() = if (bands.isEmpty()) "Sciopero oggi"
+        else "Sciopero oggi · treni a rischio " + joinItalian(bands.map { (a, b) -> "${a.format(HM)}–${b.format(HM)}" })
+
+    /** La riga sotto spiega il pallino (solo se ci sono pallini da spiegare). */
+    val legend: String? get() = if (bands.isEmpty()) null else "● = treno a rischio, potrebbe non passare"
+
+    private companion object {
+        val HM: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+        fun joinItalian(parts: List<String>) =
+            if (parts.size <= 1) parts.joinToString("") else parts.dropLast(1).joinToString(", ") + " e " + parts.last()
+    }
+}
 
 object AlertRules {
 
@@ -113,8 +156,31 @@ object AlertRules {
             urgent = urgent,
             all = all,
             badge = urgent.any { key(it, now) !in seen },
+            strike = strikeToday(file, now),
         )
     }
+
+    /**
+     * C'è uno sciopero dei treni OGGI? Il giorno è quello della fine dello
+     * sciopero (la data di "inizio" sulla pagina Cotral è quella di
+     * pubblicazione). Solo gli scioperi urgenti: quelli "notizia" sono solo
+     * dei bus o rinviati. Sparisce dopo la fine dell'ultima fascia.
+     * La X nel menu non lo toglie: il giorno dello sciopero serve vederlo.
+     */
+    fun strikeToday(file: AlertsFile?, now: LocalDateTime): StrikeDay? {
+        val a = valid(file, now).firstOrNull { it.urgent && it.isStrike && it.endTime?.toLocalDate() == now.toLocalDate() }
+            ?: return null
+        val end = a.endTime ?: return null
+        val bands = a.trainStrikeBands.mapNotNull { parseBand(it) }
+        if (bands.isNotEmpty() && now.toLocalTime().isAfter(bands.maxOf { it.second })) return null
+        return StrikeDay(end.toLocalDate(), bands, a.link, end)
+    }
+
+    /** "08:30-16:59" -> 08:30..16:59 (null se non si legge). */
+    private fun parseBand(s: String): Pair<LocalTime, LocalTime>? = runCatching {
+        val (a, b) = s.split("-").map { LocalTime.parse(it.trim()) }
+        a to b
+    }.getOrNull()
 
     /** Chiavi da segnare come "viste" quando si apre il menu. */
     fun keysToMarkSeen(file: AlertsFile?, now: LocalDateTime): Set<String> =

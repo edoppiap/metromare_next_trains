@@ -121,6 +121,39 @@ class AlertsTest {
         assertFalse(v.badge)
     }
 
+    private fun at(d: Int, h: Int, m: Int) = LocalDateTime.of(2026, 11, d, h, m)
+
+    @Test
+    fun `lo sciopero c'e' solo il giorno della fine, fino all'ultima fascia`() {
+        assertNull(AlertRules.strikeToday(file, at(19, 23, 0)))           // il giorno prima: no
+        val s = AlertRules.strikeToday(file, at(20, 6, 0))!!
+        assertEquals("Sciopero oggi · treni a rischio 08:30–16:59 e 20:00–23:59", s.title)
+        assertEquals("● = treno a rischio, potrebbe non passare", s.legend)
+        assertNotNull(AlertRules.strikeToday(file, at(20, 23, 59)))
+        assertNull(AlertRules.strikeToday(file, at(21, 0, 0)))            // il giorno dopo: no
+    }
+
+    @Test
+    fun `a rischio conta la partenza dal capolinea, non il passaggio`() {
+        val s = AlertRules.strikeToday(file, at(20, 8, 0))!!
+        assertFalse(s.atRisk(at(20, 8, 25)))   // passa ad Acilia alle 08:46, ma è partito prima
+        assertTrue(s.atRisk(at(20, 8, 30)))    // primo minuto della fascia
+        assertTrue(s.atRisk(at(20, 16, 59)))   // ultimo minuto
+        assertFalse(s.atRisk(at(20, 17, 0)))   // fascia garantita
+        assertFalse(s.atRisk(at(20, 19, 45)))  // passa ad Acilia alle 20:06: non a rischio
+        assertTrue(s.atRisk(at(20, 20, 0)))
+        assertFalse(s.atRisk(at(21, 8, 30)))   // un altro giorno
+    }
+
+    @Test
+    fun `senza fasce lette c'e' la riga ma nessun pallino`() {
+        val f = AlertsParser.parse(real.replace("\"trainStrikeBands\": [\"08:30-16:59\", \"20:00-23:59\"]", "\"trainStrikeBands\": []"))!!
+        val s = AlertRules.strikeToday(f, at(20, 10, 0))!!
+        assertEquals("Sciopero oggi", s.title)
+        assertNull(s.legend)
+        assertFalse(s.atRisk(at(20, 10, 0)))
+    }
+
     @Test
     fun `le chiavi di avvisi spariti dal file vengono dimenticate`() {
         val keys = setOf("5278@2026-11-13T15:14:58@annuncio", "1234@2026-09-09T22:06:00@annuncio")

@@ -40,6 +40,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
+import io.github.edoppiap.orarilido.alerts.StrikeDay
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -85,6 +86,8 @@ data class MainUiState(
     val validFromLong: String = "",
     /** Fermate dei bus sostitutivi, sempre sulla mappa da vicino (mai in Go). */
     val busStops: List<BusStopUi> = emptyList(),
+    /** Sciopero oggi: riga in cima alla tendina (null = giorno normale). */
+    val strike: StrikeDay? = null,
 )
 
 /** Una fermata del bus sostitutivo sulla mappa; il tocco mostra [title] e [detail]. */
@@ -162,6 +165,8 @@ data class DepartureRow(
     val missed: Boolean = false,
     /** Bus sostitutivo (non un treno): la UI mette il cartello del bus davanti. */
     val bus: Boolean = false,
+    /** Giorno di sciopero: treno a rischio, pallino ambra accanto all'orario. */
+    val atRisk: Boolean = false,
 )
 
 /**
@@ -268,6 +273,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Sciopero di oggi, dagli avvisi Cotral (lo passa MainActivity da AlertsViewModel). */
+    private var strike: StrikeDay? = null
+
+    fun setStrike(s: StrikeDay?) {
+        if (s == strike) return
+        strike = s
+        refresh()
+    }
+
     /** Ricalcola schede e prossimi treni rispetto all'ora attuale. */
     fun refresh() {
         val p = provider ?: return
@@ -348,6 +362,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             settings = settings,
             validFromLong = p.validFrom.format(DATE_LONG),
             busStops = busStopsUi(p),
+            // Lo sciopero vale per il giorno di oggi: se è finito (o non è oggi), niente riga.
+            strike = strike?.takeIf { it.date == now.toLocalDate() && !now.isAfter(it.end) },
         )
         if (dayRequest != null) buildDay()  // aggiorna anche "passati / prossimo" nella giornata
     }
@@ -892,6 +908,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             unconfirmed = dep.unconfirmed,
             imminent = minutes <= 3,
             missed = reachMinutes != null && minutes < reachMinutes,
+            atRisk = strike?.atRisk(dep.origin ?: dep.time) == true,
         )
     }
 
