@@ -1,6 +1,16 @@
 package io.github.edoppiap.orarilido.ui
 
 import io.github.edoppiap.orarilido.ui.theme.LocalOnBackground
+import io.github.edoppiap.orarilido.ui.theme.LocalDarkTheme
+import io.github.edoppiap.orarilido.ui.theme.AlertAmber
+import io.github.edoppiap.orarilido.ui.theme.AlertAmberDark
+import io.github.edoppiap.orarilido.ui.theme.AlertInkDark
+import io.github.edoppiap.orarilido.ui.theme.AlertMuted
+import io.github.edoppiap.orarilido.ui.theme.AlertMutedDark
+import io.github.edoppiap.orarilido.ui.theme.AlertPale
+import io.github.edoppiap.orarilido.ui.theme.AlertPaleDark
+import io.github.edoppiap.orarilido.ui.theme.Ink
+import androidx.compose.ui.graphics.Color
 import io.github.edoppiap.orarilido.alerts.Alert
 import io.github.edoppiap.orarilido.alerts.AlertRules
 import io.github.edoppiap.orarilido.alerts.AlertsView
@@ -260,20 +270,29 @@ private fun MenuCard(pages: List<InfoPage>, onNavigate: (InfoPage) -> Unit, trai
     }
 }
 
+/** Colori della scheda di un avviso urgente (versione B: crema + pallino ambra). */
+private data class AlertColors(val bg: Color, val ink: Color, val muted: Color, val dot: Color)
+
+@Composable
+private fun alertColors(): AlertColors =
+    if (LocalDarkTheme.current) AlertColors(AlertPaleDark, AlertInkDark, AlertMutedDark, AlertAmberDark)
+    else AlertColors(AlertPale, Ink, AlertMuted, AlertAmber)
+
 /**
- * Avviso urgente in cima al menu: pallino rosso (lo stesso dell'icona ☰),
+ * Avviso urgente in cima al menu: scheda color crema con pallino ambra,
  * titolo di Cotral, per gli scioperi le fasce dei treni, data dell'ultimo
  * aggiornamento di Cotral. Tocco = pagina di Cotral nel browser; X = togli.
+ * (Il pallino sull'icona ☰ invece è rosso: è la notifica.)
  */
 @Composable
 private fun UrgentAlertCard(a: Alert, onDismiss: () -> Unit) {
-    val colors = MaterialTheme.colorScheme
+    val c = alertColors()
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(colors.surface)
+            .background(c.bg)
             .clickable { runCatching { uriHandler.openUri(a.link) } }
             .padding(start = 16.dp, top = 14.dp, bottom = 14.dp),
         verticalAlignment = Alignment.Top,
@@ -283,20 +302,20 @@ private fun UrgentAlertCard(a: Alert, onDismiss: () -> Unit) {
                 .padding(top = 6.dp, end = 10.dp)
                 .size(9.dp)
                 .clip(RoundedCornerShape(50))
-                .background(colors.error),
+                .background(c.dot),
         )
         Column(Modifier.weight(1f)) {
-            Text(a.title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurface)
+            Text(a.title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = c.ink)
             AlertRules.strikeLabel(a)?.let {
-                Text(it, fontSize = 14.sp, color = colors.onSurface, modifier = Modifier.padding(top = 2.dp))
+                Text(it, fontSize = 14.sp, color = c.ink, modifier = Modifier.padding(top = 2.dp))
             }
             Text(
                 "Avviso Cotral · ${AlertRules.updatedLabel(a)} ↗",
-                fontSize = 13.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp),
+                fontSize = 13.sp, color = c.muted, modifier = Modifier.padding(top = 4.dp),
             )
         }
         IconButton(onClick = onDismiss) {
-            Text("✕", fontSize = 16.sp, color = colors.onSurfaceVariant)
+            Text("✕", fontSize = 16.sp, color = c.muted)
         }
     }
 }
@@ -333,7 +352,7 @@ private fun NewsList(all: List<Alert>) {
                             .padding(top = 6.dp, end = 10.dp)
                             .size(9.dp)
                             .clip(RoundedCornerShape(50))
-                            .background(colors.error),
+                            .background(alertColors().dot),  // ambra, come la scheda nel menu
                     )
                 }
                 Column(Modifier.weight(1f)) {
