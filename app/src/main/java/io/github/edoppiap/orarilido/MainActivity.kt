@@ -32,6 +32,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import io.github.edoppiap.orarilido.location.LocationSource
 import io.github.edoppiap.orarilido.schedule.Direction
+import io.github.edoppiap.orarilido.ui.AlertsViewModel
 import io.github.edoppiap.orarilido.ui.DayScreen
 import io.github.edoppiap.orarilido.ui.InfoPage
 import io.github.edoppiap.orarilido.ui.InfoScreen
@@ -50,6 +51,9 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
+
+    /** Avvisi Cotral (menu, pallino rosso): separati da orari e mappa. */
+    private val alertsViewModel: AlertsViewModel by viewModels()
 
     private val locationSource by lazy { LocationSource(this) }
 
@@ -76,6 +80,7 @@ class MainActivity : ComponentActivity() {
             }
             OrariTheme(darkTheme = dark) {
                 val day by viewModel.day.collectAsState()
+                val alerts by alertsViewModel.view.collectAsState()
                 // Pagina del menu aperta (null = chiuso). "Saveable": sopravvive alla rotazione.
                 var infoPage by rememberSaveable { mutableStateOf<InfoPage?>(null) }
                 // Pagina "Bus sostitutivi" aperta dalla giornata (non dal menu).
@@ -95,8 +100,12 @@ class MainActivity : ComponentActivity() {
                         onStartGo = viewModel::startGo,
                         onGoDirection = viewModel::setGoDirection,
                         onPinStop = viewModel::togglePinnedStop,
-                        onMenu = { infoPage = InfoPage.MENU },
+                        onMenu = {
+                            infoPage = InfoPage.MENU
+                            alertsViewModel.onMenuOpened()  // pallino spento: gli avvisi ora li hai visti
+                        },
                         overlayOpen = day != null || infoPage != null,
+                        menuBadge = alerts.badge,
                     )
                     // Giornata: entra da destra. "lastDay" la tiene disegnata mentre esce.
                     var lastDay by remember { mutableStateOf(day) }
@@ -158,6 +167,8 @@ class MainActivity : ComponentActivity() {
                                         onClearSaved = viewModel::clearSavedChoices,
                                     )
                                 },
+                                alerts = alerts,
+                                onDismissAlert = alertsViewModel::dismiss,
                             )
                         }
                     }
@@ -186,8 +197,12 @@ class MainActivity : ComponentActivity() {
         // quindi c'è anche un aggiornamento immediato al ritorno.
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                // Ritorno in primo piano: avvisi Cotral (scarica solo se l'ultima
+                // volta è stata più di 10 minuti fa; mai prima degli orari).
+                alertsViewModel.onForeground()
                 while (true) {
                     viewModel.refresh()
+                    alertsViewModel.tick()
                     val toNextMinute = 60_000 - System.currentTimeMillis() % 60_000
                     // In Go ogni secondo: il pallino avanza sui binari tra una
                     // posizione GPS e l'altra (vedi GoDetector.estimateAlong).

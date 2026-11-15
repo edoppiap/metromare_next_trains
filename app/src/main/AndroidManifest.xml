@@ -7,6 +7,10 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
+    <!-- Internet: mappa Google e avvisi Cotral (file avvisi.json su GitHub,
+         nessun dato inviato). Google Maps lo aggiungerebbe comunque. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:name=".OrariApp"
         android:allowBackup="true"

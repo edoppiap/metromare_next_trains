@@ -102,6 +102,22 @@ class StationPrefs(context: Context) {
         }
     }
 
+    /**
+     * Avvisi Cotral: chiavi di quelli già visti (pallino spento) e di quelli
+     * tolti con la X. Sono solo numeri di avviso e date di Cotral.
+     */
+    suspend fun loadAlertKeys(): Pair<Set<String>, Set<String>> {
+        val p = store.data.first()
+        return p[ALERTS_SEEN].orEmpty() to p[ALERTS_DISMISSED].orEmpty()
+    }
+
+    suspend fun setAlertKeys(seen: Set<String>, dismissed: Set<String>) {
+        store.edit {
+            it[ALERTS_SEEN] = seen
+            it[ALERTS_DISMISSED] = dismissed
+        }
+    }
+
     /** Impostazioni → "Cancella preferite e fermate salvate". */
     suspend fun clearFavoritesAndGoStops() {
         store.edit {
@@ -126,5 +142,8 @@ class StationPrefs(context: Context) {
         val WALK_LEVEL = intPreferencesKey("walk_level")
         val BIKE_LEVEL = intPreferencesKey("bike_level")
         val FADE_MISSED = booleanPreferencesKey("fade_missed")
+        // Avvisi Cotral
+        val ALERTS_SEEN = stringSetPreferencesKey("alerts_seen")
+        val ALERTS_DISMISSED = stringSetPreferencesKey("alerts_dismissed")
     }
 }

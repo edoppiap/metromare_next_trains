@@ -1,0 +1,139 @@
+package io.github.edoppiap.orarilido.alerts
+
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
+/*
+ * Avvisi Cotral (scioperi, guasti, lavori). Kotlin puro, niente Android:
+ * si prova con i test JUnit.
+ *
+ * Da dove arrivano: uno script su GitHub (tools/cotral_alerts.py, ogni 30
+ * minuti) legge gli avvisi pubblici di Cotral, tiene quelli sulla Metromare
+ * e scrive avvisi.json nel ramo "dati". L'app scarica quel file e basta:
+ * mostra SEMPRE il titolo originale di Cotral e il link alla sua pagina,
+ * mai nostre interpretazioni. Le regole "urgente / notizia" stanno nello
+ * script; qui si decide solo cosa mostrare ADESSO e quando accendere il
+ * pallino rosso sull'icona del menu.
+ */
+
+/** Il file avvisi.json. */
+@Serializable
+data class AlertsFile(
+    /** Quando lo script ha cambiato gli avvisi l'ultima volta (ora di Roma). */
+    val updated: String? = null,
+    val alerts: List<Alert> = emptyList(),
+)
+
+/** Un avviso, come lo scrive lo script. */
+@Serializable
+data class Alert(
+    val id: Long,
+    /** Ultima modifica di Cotral, es. "2026-11-13T15:14:58". Se cambia, il pallino si riaccende. */
+    val modified: String,
+    /** "urgente" (in cima al menu, pallino) oppure "notizia" (solo nella lista). */
+    val level: String,
+    val title: String,
+    val link: String,
+    /** Fine validità (o fine sciopero), es. "2026-11-20T23:59:00"; null = non indicata. */
+    val end: String? = null,
+    /** Solo scioperi: fasce in cui i treni sono in sciopero, es. ["08:30-16:59"]. */
+    val trainStrikeBands: List<String> = emptyList(),
+) {
+    val urgent: Boolean get() = level == "urgente"
+    val isStrike: Boolean get() = title.contains("sciopero", ignoreCase = true)
+    val endTime: LocalDateTime? get() = end?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
+    val modifiedTime: LocalDateTime? get() = runCatching { LocalDateTime.parse(modified) }.getOrNull()
+}
+
+object AlertsParser {
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /**
+     * Legge il file; null se non è valido (allora l'app tiene la copia di
+     * prima). Per sicurezza tiene solo link a pagine di Cotral: anche se
+     * qualcuno manomettesse il file, l'app non manderebbe nessuno altrove.
+     */
+    fun parse(text: String): AlertsFile? {
+        val file = runCatching { json.decodeFromString(AlertsFile.serializer(), text) }.getOrNull() ?: return null
+        val ok = file.alerts.filter {
+            it.link.startsWith("https://cotralspa.it/") &&
+                it.title.isNotBlank() && it.title.length <= 200 &&
+                it.modifiedTime != null
+        }
+        return file.copy(alerts = ok)
+    }
+}
+
+/** Cosa mostrare adesso. */
+data class AlertsView(
+    /** Urgenti non tolti con la X: in cima al menu (l'interfaccia ne mostra al massimo 2). */
+    val urgent: List<Alert> = emptyList(),
+    /** Tutti gli avvisi validi, urgenti per primi: pagina "Notizie". */
+    val all: List<Alert> = emptyList(),
+    /** Pallino rosso sull'icona ☰. */
+    val badge: Boolean = false,
+)
+
+object AlertRules {
+
+    /**
+     * La sera prima di uno sciopero il pallino si riaccende (deciso con
+     * l'utente): da quest'ora del giorno prima del giorno di fine.
+     */
+    const val EVE_HOUR = 18
+
+    /** Avvisi ancora validi: senza fine, o con la fine non ancora passata. */
+    fun valid(file: AlertsFile?, now: LocalDateTime): List<Alert> =
+        file?.alerts.orEmpty()
+            .filter { a -> a.endTime.let { it == null || !it.isBefore(now) } }
+            .sortedWith(compareBy<Alert> { !it.urgent }.thenByDescending { it.modified })
+
+    /** Siamo nella "vigilia" di uno sciopero? (dalle 18 del giorno prima alla fine) */
+    fun inEve(a: Alert, now: LocalDateTime): Boolean {
+        val end = a.endTime ?: return false
+        if (!a.isStrike) return false
+        val eveStart = end.toLocalDate().minusDays(1).atTime(EVE_HOUR, 0)
+        return !now.isBefore(eveStart)
+    }
+
+    /**
+     * Chiave di un avviso urgente "in questo momento". Visto/tolto si
+     * ricordano per chiave, quindi l'avviso torna (pallino acceso, di nuovo
+     * in cima) se Cotral lo modifica oppure se arriva la vigilia dello sciopero.
+     */
+    fun key(a: Alert, now: LocalDateTime): String =
+        "${a.id}@${a.modified}@" + if (inEve(a, now)) "vigilia" else "annuncio"
+
+    fun view(file: AlertsFile?, now: LocalDateTime, seen: Set<String>, dismissed: Set<String>): AlertsView {
+        val all = valid(file, now)
+        val urgent = all.filter { it.urgent && key(it, now) !in dismissed }
+        return AlertsView(
+            urgent = urgent,
+            all = all,
+            badge = urgent.any { key(it, now) !in seen },
+        )
+    }
+
+    /** Chiavi da segnare come "viste" quando si apre il menu. */
+    fun keysToMarkSeen(file: AlertsFile?, now: LocalDateTime): Set<String> =
+        valid(file, now).filter { it.urgent }.map { key(it, now) }.toSet()
+
+    /** Tiene solo le chiavi di avvisi ancora nel file: così l'elenco salvato non cresce per sempre. */
+    fun prune(keys: Set<String>, file: AlertsFile?): Set<String> {
+        val ids = file?.alerts.orEmpty().map { "${it.id}@" }
+        return keys.filter { k -> ids.any { k.startsWith(it) } }.toSet()
+    }
+
+    private val DAY_TIME = DateTimeFormatter.ofPattern("d/M HH:mm")
+
+    /** "aggiornato 13/11 15:14" */
+    fun updatedLabel(a: Alert): String = a.modifiedTime?.let { "aggiornato " + it.format(DAY_TIME) } ?: ""
+
+    /** "Treni in sciopero 08:30–16:59 · 20:00–23:59" (solo scioperi con fasce lette). */
+    fun strikeLabel(a: Alert): String? =
+        a.trainStrikeBands.takeIf { it.isNotEmpty() }
+            ?.joinToString(" · ") { it.replace("-", "–") }
+            ?.let { "Treni in sciopero $it" }
+}

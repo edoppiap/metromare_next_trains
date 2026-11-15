@@ -1,13 +1,20 @@
 package io.github.edoppiap.orarilido.ui
 
 import io.github.edoppiap.orarilido.ui.theme.LocalOnBackground
+import io.github.edoppiap.orarilido.alerts.Alert
+import io.github.edoppiap.orarilido.alerts.AlertRules
+import io.github.edoppiap.orarilido.alerts.AlertsView
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.key
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,6 +41,7 @@ import androidx.compose.ui.unit.sp
 /** Le pagine del menu. */
 enum class InfoPage(val title: String) {
     MENU("Menu"),
+    NEWS("Notizie"),
     SETTINGS("Impostazioni"),
     BUSES("Bus sostitutivi"),
     STORY("La storia di questa app"),
@@ -56,6 +64,10 @@ fun InfoScreen(
     settingsContent: @Composable () -> Unit = {},
     /** Pagina aperta da fuori dal menu (es. "Cos'è?" nella giornata): indietro chiude e basta. */
     standalone: Boolean = false,
+    /** Avvisi Cotral: urgenti in cima al menu, tutti nella pagina "Notizie". */
+    alerts: AlertsView = AlertsView(),
+    /** X su un avviso urgente. */
+    onDismissAlert: (Alert) -> Unit = {},
 ) {
     val back = { onNavigate(if (page == InfoPage.MENU || standalone) null else InfoPage.MENU) }
     BackHandler(onBack = back)
@@ -81,8 +93,10 @@ fun InfoScreen(
                 .padding(top = 8.dp, bottom = 16.dp),
         ) {
             if (page == InfoPage.MENU) {
-                MenuList(onNavigate)
+                MenuList(onNavigate, alerts, onDismissAlert)
                 if (debugActions.isNotEmpty()) DebugList(debugActions)
+            } else if (page == InfoPage.NEWS) {
+                NewsList(alerts.all)
             } else if (page == InfoPage.SETTINGS) {
                 settingsContent()
             } else {
@@ -177,8 +191,24 @@ private fun DebugList(actions: List<Pair<String, () -> Unit>>) {
 }
 
 @Composable
-private fun MenuList(onNavigate: (InfoPage) -> Unit) {
-    val colors = MaterialTheme.colorScheme
+private fun MenuList(onNavigate: (InfoPage) -> Unit, alerts: AlertsView, onDismissAlert: (Alert) -> Unit) {
+    // In cima: al massimo 2 avvisi urgenti (sciopero, guasto), con la X per toglierli.
+    // animateContentSize: quando uno sparisce, il menu sotto risale piano
+    // invece di saltare.
+    Column(Modifier.fillMaxWidth().animateContentSize()) {
+        alerts.urgent.take(2).forEach { a ->
+            key(a.id) {
+                UrgentAlertCard(a, onDismiss = { onDismissAlert(a) })
+                Spacer(Modifier.height(12.dp))
+            }
+        }
+    }
+    // Notizie: tutti gli avvisi Cotral sulla linea (anche gli urgenti tolti con la X).
+    MenuCard(
+        listOf(InfoPage.NEWS), onNavigate,
+        trailing = mapOf(InfoPage.NEWS to if (alerts.all.isEmpty()) "" else alerts.all.size.toString()),
+    )
+    Spacer(Modifier.height(12.dp))
     // Impostazioni in un riquadro a sé, sopra le pagine informative.
     MenuCard(listOf(InfoPage.SETTINGS), onNavigate)
     Spacer(Modifier.height(12.dp))
@@ -201,9 +231,9 @@ private fun MenuList(onNavigate: (InfoPage) -> Unit) {
     )
 }
 
-/** Un riquadro con alcune voci del menu, separate da una riga. */
+/** Un riquadro con alcune voci del menu, separate da una riga. [trailing] = testo a destra (es. quanti avvisi). */
 @Composable
-private fun MenuCard(pages: List<InfoPage>, onNavigate: (InfoPage) -> Unit) {
+private fun MenuCard(pages: List<InfoPage>, onNavigate: (InfoPage) -> Unit, trailing: Map<InfoPage, String> = emptyMap()) {
     val colors = MaterialTheme.colorScheme
     Column(
         Modifier
@@ -221,11 +251,121 @@ private fun MenuCard(pages: List<InfoPage>, onNavigate: (InfoPage) -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(p.title, modifier = Modifier.weight(1f), fontSize = 16.sp, color = colors.onSurface)
+                trailing[p]?.takeIf { it.isNotEmpty() }?.let {
+                    Text(it, fontSize = 15.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(end = 4.dp))
+                }
                 Chevron(colors.onSurfaceVariant, pointsLeft = false)
             }
         }
     }
 }
+
+/**
+ * Avviso urgente in cima al menu: pallino rosso (lo stesso dell'icona ☰),
+ * titolo di Cotral, per gli scioperi le fasce dei treni, data dell'ultimo
+ * aggiornamento di Cotral. Tocco = pagina di Cotral nel browser; X = togli.
+ */
+@Composable
+private fun UrgentAlertCard(a: Alert, onDismiss: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(colors.surface)
+            .clickable { runCatching { uriHandler.openUri(a.link) } }
+            .padding(start = 16.dp, top = 14.dp, bottom = 14.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            Modifier
+                .padding(top = 6.dp, end = 10.dp)
+                .size(9.dp)
+                .clip(RoundedCornerShape(50))
+                .background(colors.error),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(a.title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurface)
+            AlertRules.strikeLabel(a)?.let {
+                Text(it, fontSize = 14.sp, color = colors.onSurface, modifier = Modifier.padding(top = 2.dp))
+            }
+            Text(
+                "Avviso Cotral · ${AlertRules.updatedLabel(a)} ↗",
+                fontSize = 13.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        IconButton(onClick = onDismiss) {
+            Text("✕", fontSize = 16.sp, color = colors.onSurfaceVariant)
+        }
+    }
+}
+
+/** Pagina "Notizie": tutti gli avvisi Cotral sulla Metromare, poi i link alle pagine ufficiali. */
+@Composable
+private fun NewsList(all: List<Alert>) {
+    val colors = MaterialTheme.colorScheme
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(colors.surface),
+    ) {
+        if (all.isEmpty()) {
+            Text(
+                "Nessun avviso Cotral sulla Metromare in questo momento.",
+                modifier = Modifier.padding(16.dp), fontSize = 15.sp, color = colors.onSurfaceVariant,
+            )
+        }
+        all.forEachIndexed { i, a ->
+            if (i > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.outlineVariant)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { runCatching { uriHandler.openUri(a.link) } }
+                    .padding(16.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                if (a.urgent) {
+                    Box(
+                        Modifier
+                            .padding(top = 6.dp, end = 10.dp)
+                            .size(9.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(colors.error),
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(a.title, fontSize = 16.sp, color = colors.onSurface)
+                    AlertRules.strikeLabel(a)?.let {
+                        Text(it, fontSize = 14.sp, color = colors.onSurface, modifier = Modifier.padding(top = 2.dp))
+                    }
+                    Text(
+                        AlertRules.updatedLabel(a).replaceFirstChar { it.uppercase() },
+                        fontSize = 13.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                Text("↗", fontSize = 18.sp, color = colors.primary, modifier = Modifier.padding(start = 8.dp))
+            }
+        }
+    }
+    Text(
+        "Avvisi pubblicati da Cotral, riportati qui in automatico (con un ritardo fino a circa mezz'ora). " +
+            "Fa fede la pagina ufficiale.",
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp),
+        fontSize = 12.sp,
+        color = LocalOnBackground.current.muted,
+    )
+    LinksCard(OFFICIAL_LINKS)
+}
+
+/** Pagine ufficiali, in fondo alle Notizie. */
+private val OFFICIAL_LINKS = listOf(
+    InfoLink("Tutti gli avvisi Cotral", "Scioperi, guasti, lavori su bus e treni", "https://cotralspa.it/avvisi/"),
+    InfoLink("Pagina Metromare di Cotral", "Orari, fermate, bus sostitutivi", "https://cotralspa.it/metromare/"),
+    InfoLink("Infomobilità Astral", "Avvisi sulla linea", "https://infomobilita.astralspa.it/"),
+)
 
 private const val REPO = "github.com/edoppiap/metromare_next_trains"
 
@@ -256,7 +396,8 @@ private val INFO_TEXTS = mapOf(
 
         Connessioni a internet
         La mappa è fornita da Google Maps: per mostrarla il telefono scarica le immagini della zona inquadrata dai server di Google, che ricevono dati tecnici come l'indirizzo IP e l'area visualizzata, secondo l'informativa di Google (policies.google.com/privacy).
-        In futuro l'app potrà scaricare l'orario aggiornato da GitHub: un semplice file, senza alcun dato personale.
+        Gli avvisi Cotral (scioperi, guasti, lavori) arrivano da GitHub, dove un programma li copia ogni mezz'ora dal sito di Cotral: l'app scarica un semplice file, uguale per tutti, senza inviare alcun dato (né posizione né altro). GitHub vede solo l'indirizzo IP, come per qualunque pagina web. In futuro da lì potrà arrivare anche l'orario aggiornato.
+        L'app ricorda solo quali avvisi hai già visto o tolto, per spegnere il pallino rosso.
 
         Cosa NON c'è
         Niente statistiche d'uso, pubblicità, segnalazione automatica degli errori, account o profilazione.
@@ -270,7 +411,7 @@ private val INFO_TEXTS = mapOf(
         Questa app non è affiliata né approvata da Cotral, Astral, Regione Lazio o Roma Capitale. "Metromare" è un marchio dei rispettivi titolari ed è citato solo per indicare la linea.
 
         Orari programmati
-        Gli orari sono quelli PROGRAMMATI dell'orario ufficiale, non in tempo reale: ritardi, soppressioni, scioperi, lavori e bus sostitutivi non sono mostrati. Prima di partire, soprattutto in caso di dubbi, controlla i canali ufficiali (ad esempio l'app Astral Infomobilità).
+        Gli orari sono quelli PROGRAMMATI dell'orario ufficiale, non in tempo reale: ritardi e soppressioni non sono mostrati, e gli orari non cambiano in caso di sciopero o guasto. Gli avvisi di Cotral (scioperi, guasti, lavori) sono riportati nel menu in automatico, con un ritardo fino a circa mezz'ora, e potrebbero mancare. Prima di partire, soprattutto in caso di dubbi, controlla i canali ufficiali (ad esempio l'app Astral Infomobilità).
         Gli orari contrassegnati con "?" non sono confermati dalla fonte ufficiale.
 
         Percorsi suggeriti
@@ -308,6 +449,9 @@ private val INFO_TEXTS = mapOf(
 
         Corse con il punto interrogativo rosso
         Cotral annuncia tre corse in più da Acilia verso Roma, dal lunedì al venerdì alle 6:10, 7:10 e 8:10, che però non compaiono nel PDF dell'orario ufficiale. L'app le mostra con un punto interrogativo rosso accanto all'orario finché non saranno confermate: potrebbero non esserci.
+
+        Avvisi (Notizie)
+        Titoli e link degli avvisi pubblicati da Cotral sul suo sito (cotralspa.it/avvisi), scelti in automatico tra quelli che riguardano la Metromare.
 
         Bus sostitutivi serali
         Orari e fermate dalla pagina Metromare di Cotral (cotralspa.it). Posizione delle fermate dai dati aperti di Roma Servizi per la Mobilità, licenza CC BY 4.0.

@@ -119,6 +119,8 @@ fun MainScreen(
     onPinStop: (String) -> Unit = {},
     /** C'è una pagina sopra (giornata, menu): conta il suo sfondo per la barra di stato. */
     overlayOpen: Boolean = false,
+    /** Pallino rosso sull'icona ☰: c'è un avviso Cotral urgente non ancora visto. */
+    menuBadge: Boolean = false,
 ) {
     if (!state.ready) return  // dura pochi ms: la finestra resta sullo sfondo
 
@@ -262,6 +264,7 @@ fun MainScreen(
                         if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
                     },
                     onMenu = onMenu,
+                    menuBadge = menuBadge,
                     // Il selettore cambia cerchi E percorso: serve se c'è almeno uno dei due.
                     travelToggleVisible = state.userLocation != null && (circlesOn || routeOnMap),
                     onRouteVisible = { routeOnMap = it },
@@ -327,6 +330,7 @@ private fun MapLayer(
     onMapGesture: () -> Unit,
     onStationClick: (String) -> Unit,
     onMenu: () -> Unit,
+    menuBadge: Boolean,
     travelToggleVisible: Boolean,
     onRouteVisible: (Boolean) -> Unit,
     onLineFraming: (Boolean) -> Unit,
@@ -393,7 +397,27 @@ private fun MapLayer(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            MapButton(onClick = onMenu) { MenuIcon(MaterialTheme.colorScheme.onSurface) }
+            Box {
+                MapButton(onClick = onMenu) { MenuIcon(MaterialTheme.colorScheme.onSurface) }
+                // Pallino rosso: avviso Cotral urgente (sciopero, guasto) non ancora
+                // visto. Si spegne aprendo il menu. Compare e sparisce in dissolvenza.
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = menuBadge,
+                    enter = fadeIn() + androidx.compose.animation.scaleIn(),
+                    exit = fadeOut() + androidx.compose.animation.scaleOut(),
+                    modifier = Modifier.align(Alignment.TopEnd),
+                ) {
+                    Box(
+                        Modifier
+                            .size(13.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(MaterialTheme.colorScheme.surface)  // bordino che lo stacca dal pulsante
+                            .padding(2.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(MaterialTheme.colorScheme.error),
+                    )
+                }
+            }
             Spacer(Modifier.weight(1f))
             // Il selettore serve quando ci sono i cerchi o il percorso suggerito.
             // In Go al suo posto c'è la X per uscire (i cerchi in treno non servono).
