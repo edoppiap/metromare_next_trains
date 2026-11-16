@@ -78,6 +78,30 @@ class WalkGraph private constructor(
 
     fun node(n: Int) = GeoPoint(nodeLat[n], nodeLon[n])
 
+    // ---- "Isole": pezzi di rete collegati tra loro ----
+    // In OSM ci sono stradine staccate dal resto (es. un vialetto in un parco
+    // la cui uscita è "private", quindi esclusa): ~56 km a piedi nel walk.bin
+    // del 14/11. Se ti agganci lì, da lì non si arriva a nessuna stazione.
+    // Per ogni nodo: il numero della sua isola (stesso numero = collegati),
+    // calcolato una volta per mezzo (WALK o BIKE) ignorando i sensi unici.
+    private val islandsByMask = HashMap<Int, IntArray>()
+
+    /** Isola di ogni nodo usando solo gli archi con il bit [mask] (WALK o BIKE). */
+    @Synchronized
+    fun islands(mask: Int): IntArray = islandsByMask.getOrPut(mask) {
+        // "Union-find": ogni nodo punta a un rappresentante; unire = far puntare l'uno all'altro.
+        val parent = IntArray(nodeCount) { it }
+        fun find(x: Int): Int {
+            var a = x
+            while (parent[a] != a) { parent[a] = parent[parent[a]]; a = parent[a] }
+            return a
+        }
+        for (e in 0 until edgeCount) {
+            if (edgeFlags[e] and mask != 0) parent[find(edgeA[e])] = find(edgeB[e])
+        }
+        IntArray(nodeCount) { find(it) }
+    }
+
     // ---- Ricerca della strada più vicina a un punto (griglia di celle) ----
     // Ogni cella (~280 × 250 m) sa quali archi la attraversano: per trovare la
     // strada più vicina a te si guardano solo le celle attorno, non 100 mila archi.

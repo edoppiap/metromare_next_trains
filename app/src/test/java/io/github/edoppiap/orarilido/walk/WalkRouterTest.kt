@@ -80,6 +80,27 @@ class WalkRouterTest {
         assertEquals(station, r.points.last())
     }
 
+    @Test fun `una stradina staccata piu vicina non blocca il percorso, e il primo tratto e un salto`() {
+        // Vialetto isolato (nodi 3–4) a ~10 m da te; la rete vera è a ~110 m più a sud.
+        val user = GeoPoint(41.801, 12.402)
+        val g = WalkGraph.of(
+            nodes = listOf(p, t, nNorth, GeoPoint(41.8011, 12.4015), GeoPoint(41.8011, 12.4025)),
+            edges = listOf(
+                EdgeSpec(0, 1, WALK or BIKE),
+                EdgeSpec(0, 2, WALK or BIKE),
+                EdgeSpec(2, 1, WALK or BIKE),
+                EdgeSpec(3, 4, WALK or BIKE),   // l'isola
+            ),
+            arrivals = arrivals,
+        )
+        val r = route(g, TravelMode.WALK, from = user)!!
+        assertEquals(user, r.points[0])
+        assertTrue(r.gap)
+        assertEquals(station, r.points.last())
+        // A ridosso della strada niente salto
+        assertTrue(!route(g, TravelMode.WALK, from = GeoPoint(41.8001, 12.402))!!.gap)
+    }
+
     @Test fun `fuori dalla rete o oltre il limite di tempo niente percorso`() {
         val g = graph(WALK or BIKE)
         assertNull(route(g, TravelMode.WALK, from = GeoPoint(41.83, 12.40)))  // ~3 km dalla strada

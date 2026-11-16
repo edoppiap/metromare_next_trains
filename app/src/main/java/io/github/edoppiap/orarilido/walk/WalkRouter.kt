@@ -10,8 +10,13 @@ import io.github.edoppiap.orarilido.walk.WalkGraph.Companion.BIKE_PUSH
 import io.github.edoppiap.orarilido.walk.WalkGraph.Companion.WALK
 import io.github.edoppiap.orarilido.walk.WalkGraph.Companion.distanceM
 
-/** Un percorso trovato: i punti da disegnare (da te alla stazione), minuti e metri. */
-data class WalkRoute(val points: List<GeoPoint>, val minutes: Double, val meters: Double)
+/**
+ * Un percorso trovato: i punti da disegnare (da te alla stazione), minuti e metri.
+ * [gap] = true se il primo tratto (points[0] → points[1]) è un "salto" in linea
+ * d'aria da te alla prima strada conosciuta (es. sei in una stradina privata
+ * che non è nella rete): la mappa lo disegna diverso, la strada la sai tu.
+ */
+data class WalkRoute(val points: List<GeoPoint>, val minutes: Double, val meters: Double, val gap: Boolean = false)
 
 /**
  * Cerca il percorso più veloce da un punto a una stazione, a piedi o in bici,
@@ -25,6 +30,9 @@ object WalkRouter {
 
     /** Più lontano di così dalla strada più vicina, niente percorso (sei fuori dalla rete). */
     private const val MAX_SNAP_M = 300.0
+
+    /** Oltre questa distanza da te alla strada il primo tratto si disegna come "salto". */
+    const val GAP_MIN_M = 25.0
 
     /**
      * Percorso da [from] alla stazione [stationId]; null se sei fuori dalle zone
@@ -40,8 +48,13 @@ object WalkRouter {
         val arrivals = g.arrivals.filter { it.stationId == stationId }
         if (arrivals.isEmpty()) return null
         val bike = mode == TravelMode.BIKE
-        val usable: (Int) -> Boolean = { e -> g.edgeFlags[e] and (if (bike) BIKE else WALK) != 0 }
-        val snap = g.snap(from, MAX_SNAP_M, usable) ?: return null
+        val mask = if (bike) BIKE else WALK
+        val usable: (Int) -> Boolean = { e -> g.edgeFlags[e] and mask != 0 }
+        // Ci si aggancia solo a strade dell'isola della stazione: una stradina
+        // staccata dal resto (anche se più vicina) non porterebbe da nessuna parte.
+        val islands = g.islands(mask)
+        val stationIslands = arrivals.map { islands[it.node] }.toSet()
+        val snap = g.snap(from, MAX_SNAP_M) { e -> usable(e) && islands[g.edgeA[e]] in stationIslands } ?: return null
 
         // Velocità sull'arco (metri al minuto): in bici a mano si va come a piedi.
         fun speed(e: Int): Double =
@@ -138,7 +151,7 @@ object WalkRouter {
         val points = reversed.asReversed().toList().let { dedup(it) }
         var meters = 0.0
         for (i in 0 until points.size - 1) meters += distanceM(points[i], points[i + 1])
-        return WalkRoute(points, cost[sink], meters)
+        return WalkRoute(points, cost[sink], meters, gap = snap.distance > GAP_MIN_M && points.size > 2)
     }
 
     /** Toglie i punti uguali consecutivi (es. te stesso già sulla strada). */

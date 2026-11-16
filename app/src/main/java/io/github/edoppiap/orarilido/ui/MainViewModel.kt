@@ -108,6 +108,8 @@ data class RouteUi(
     val minutes: Int,
     /** Minuti alla velocità "normale" (quella della rete di strade): servono per riscalare. */
     val baseMinutes: Double,
+    /** Il primo tratto è un "salto" in linea d'aria fino alla prima strada conosciuta. */
+    val gap: Boolean = false,
 )
 
 /** Modalità Go, già pronta da disegnare. */
@@ -455,7 +457,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Misura (solo log, come OrariAvvio): quanto costa il calcolo sul telefono.
             android.util.Log.i("OrariAvvio", "Percorso $mode verso $stationId: ${(System.nanoTime() - t0) / 1_000_000} ms" +
                 (found?.let { ", ${it.minutes.roundToInt()} min, ${it.meters.roundToInt()} m" } ?: ", nessuno"))
-            route = found?.let { RouteUi(stationId, mode, it.points, scaledMinutes(it.minutes, mode), it.minutes) }
+            route = found?.let { RouteUi(stationId, mode, it.points, scaledMinutes(it.minutes, mode), it.minutes, it.gap) }
             // Con i treni sbiaditi le schede usano i minuti del percorso: si ricalcola tutto.
             if (settings.fadeMissed) refresh() else _state.value = _state.value.copy(route = route)
         }

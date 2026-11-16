@@ -70,6 +70,7 @@ import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.maps.android.compose.Marker
 import androidx.compose.runtime.key
 import androidx.compose.ui.graphics.toArgb
+import com.google.android.gms.maps.model.Dash
 import com.google.android.gms.maps.model.Dot
 import com.google.android.gms.maps.model.Gap
 import com.google.android.gms.maps.model.RoundCap
@@ -686,8 +687,37 @@ fun LineMap(
                 val total = routeCumulative.last()
                 val partial = routePrefix(shownRoute.points, routeCumulative, total * f)
                 val grey = if (night) GreyDark else Grey
-                Polyline(
-                    points = partial,
+                // "Salto" iniziale (sei lontano dalle strade conosciute, es. stradina
+                // privata): trattini sottili in linea d'aria, la strada la sai tu.
+                // Il percorso vero a puntini parte dalla prima strada conosciuta.
+                val known = if (shownRoute.gap && partial.size >= 2) {
+                    Polyline(
+                        points = partial.take(2),
+                        color = grey.copy(alpha = 0.7f),
+                        width = with(density) { 2.dp.toPx() },
+                        pattern = listOf(Dash(with(density) { 4.dp.toPx() }), Gap(with(density) { 5.dp.toPx() })),
+                        zIndex = 0.4f,
+                    )
+                    // Anello dove inizia il percorso calcolato (variante "A + C", 16/11):
+                    // compare quando i trattini ci arrivano.
+                    if (partial.size >= 3 || f >= 0.999f) MarkerComposable(
+                        keys = arrayOf<Any>("routeStart", dark),
+                        state = rememberUpdatedMarkerState(partial[1]),
+                        anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
+                        zIndex = 0.45f,
+                        onClick = { true },
+                    ) {
+                        Box(
+                            Modifier
+                                .size(12.dp)
+                                .background(if (night) CardDark else Card, CircleShape)
+                                .border(2.5.dp, grey, CircleShape)
+                        )
+                    }
+                    partial.drop(1)
+                } else partial
+                if (known.size >= 2) Polyline(
+                    points = known,
                     color = grey,
                     width = with(density) { 5.dp.toPx() },
                     pattern = listOf(Dot(), Gap(with(density) { 7.dp.toPx() })),
