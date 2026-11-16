@@ -420,7 +420,7 @@ private fun MapLayer(
                         Modifier
                             .size(13.dp)
                             .clip(RoundedCornerShape(50))
-                            .background(MaterialTheme.colorScheme.surface)  // bordino che lo stacca dal pulsante
+                            .background(mapButtonFill())  // bordino che lo stacca dal pulsante
                             .padding(2.dp)
                             .clip(RoundedCornerShape(50))
                             .background(MaterialTheme.colorScheme.error),
@@ -1332,8 +1332,7 @@ private fun MapButton(onClick: () -> Unit, content: @Composable () -> Unit) {
     Box(
         Modifier
             .size(44.dp)
-            .clip(RoundedCornerShape(50))
-            .background(MaterialTheme.colorScheme.surface)
+            .mapButtonSurface()
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { content() }
@@ -1346,6 +1345,8 @@ private fun TravelToggle(mode: TravelMode, onChange: (TravelMode) -> Unit) {
         options = listOf(TravelMode.WALK to "🚶", TravelMode.BIKE to "🚲"),
         selected = mode,
         onSelect = onChange,
+        modifier = Modifier.mapButtonSurface(fill = false),
+        background = mapButtonFill(),
         fontSize = 18.sp,
     )
 }

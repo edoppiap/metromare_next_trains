@@ -826,7 +826,6 @@ fun LineMap(
         ) {
             CompassButton(
                 bearing = bearing,
-                night = night,
                 onClick = {
                     scope.launch {
                         val pos = cameraState.position
@@ -845,7 +844,6 @@ fun LineMap(
             next = nextTarget,
             // Blu = c'è un'inquadratura attiva (la mappa la mantiene); grigio = mappa spostata a mano.
             active = framing != null,
-            night = night,
             onClick = onRecenter,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -1196,20 +1194,20 @@ private const val USER_ZOOM = 16f
 private fun RecenterButton(
     next: RecenterTarget,
     active: Boolean,
-    night: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val blue = if (night) BlueDark else Blue
+    // Colori dal tema dell'app, non dalla mappa (vedi MapButtonStyle.kt).
+    val dark = io.github.edoppiap.orarilido.ui.theme.LocalDarkTheme.current
+    val blue = if (dark) BlueDark else Blue
     Box(
         modifier
             .size(44.dp)
-            .clip(CircleShape)
-            .background(if (night) CardDark else Card)
+            .mapButtonSurface()
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        val color = if (active) blue else if (night) InkDark else Ink
+        val color = if (active) blue else if (dark) InkDark else Ink
         // Crossfade: quando cambia, la vecchia icona sfuma nella nuova.
         Crossfade(targetState = next, animationSpec = tween(250), label = "recenterIcon") { target ->
             if (target == RecenterTarget.USER) RecenterIcon(color) else FitIcon(target, color)
@@ -1242,16 +1240,16 @@ private fun RecenterIcon(color: androidx.compose.ui.graphics.Color) {
 
 /** Bussola: l'ago (punta rossa = nord) ruota con la mappa. */
 @Composable
-private fun CompassButton(bearing: Float, night: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun CompassButton(bearing: Float, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val dark = io.github.edoppiap.orarilido.ui.theme.LocalDarkTheme.current
     Box(
         modifier
             .size(44.dp)
-            .clip(CircleShape)
-            .background(if (night) CardDark else Card)
+            .mapButtonSurface()
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        val grey = if (night) InkDark else Ink
+        val grey = if (dark) InkDark else Ink
         androidx.compose.foundation.Canvas(Modifier.size(24.dp)) {
             // La mappa ruotata di "bearing" gradi: il nord sta a −bearing.
             rotate(-bearing) {
