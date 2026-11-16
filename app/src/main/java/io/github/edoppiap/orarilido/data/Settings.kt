@@ -13,12 +13,13 @@ enum class MapTheme { AUTO, APP, LIGHT, DARK }
 
 /**
  * Le scelte della pagina Impostazioni. I valori predefiniti sono quelli con cui
- * l'app si comportava prima che le impostazioni esistessero: chi non le apre
- * non vede nessuna differenza (tranne "treni sbiaditi", che è nuova e parte spenta).
+ * l'app si comportava prima che le impostazioni esistessero, tranne "treni
+ * sbiaditi" (nuova, parte spenta) e il tema della mappa: dal 16/11 segue il
+ * tema dell'app (quindi del telefono), non più chiaro/scuro col tramonto.
  */
 data class AppSettings(
     val appTheme: AppTheme = AppTheme.SYSTEM,
-    val mapTheme: MapTheme = MapTheme.AUTO,
+    val mapTheme: MapTheme = MapTheme.APP,
     /** Punti di interesse sulla mappa: interruttore generale... */
     val placesOn: Boolean = true,
     /** ...e categorie scelte (restano ricordate anche a interruttore spento). */

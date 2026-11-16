@@ -101,7 +101,7 @@ fun SettingsPage(
                 RowSubtitle(MAP_THEME_SUBTITLES.getValue(settings.mapTheme))
             }
             WideToggle(
-                options = MapTheme.entries,
+                options = listOf(MapTheme.APP, MapTheme.AUTO, MapTheme.LIGHT, MapTheme.DARK),  // "Come app" (predefinita) per prima
                 selected = settings.mapTheme,
                 onSelect = { t -> onChange { it.copy(mapTheme = t) } },
             ) { t, color -> ToggleText(MAP_THEME_LABELS.getValue(t), color) }
