@@ -130,6 +130,8 @@ fun MainScreen(
     overlayOpen: Boolean = false,
     /** Pallino rosso sull'icona ☰: c'è un avviso Cotral urgente non ancora visto. */
     menuBadge: Boolean = false,
+    /** Cresce quando l'app torna dopo tanto tempo in secondo piano: si riparte come appena aperta. */
+    resetKey: Int = 0,
 ) {
     if (!state.ready) return  // dura pochi ms: la finestra resta sullo sfondo
 
@@ -192,6 +194,20 @@ fun MainScreen(
                 listState.scrollToItem(0)
             }
         }
+    }
+
+    // Ritorno dopo tanto tempo (vedi MainActivity.stoppedAt): tendina a metà,
+    // lista in cima, selettori e cerchi come all'apertura. La mappa si
+    // reinquadra da sola (LineMap ascolta lo stesso resetKey).
+    // Il valore iniziale si ignora: conta solo quando cambia.
+    val initialReset = remember { resetKey }
+    LaunchedEffect(resetKey) {
+        if (resetKey == initialReset) return@LaunchedEffect
+        stripChoiceStation = null
+        circlesByTap = null
+        circlesHeldBack = false
+        sheet.animateTo(SheetStop.HALF)
+        listState.animateScrollToItem(0)
     }
 
     // "Indietro" con la tendina tutta su o tutta giù la riporta a metà invece di chiudere l'app.
@@ -286,6 +302,7 @@ fun MainScreen(
                     goActive = goActive,
                     onExitGo = onExitGo,
                     onStartGo = onStartGo,
+                    resetKey = resetKey,
                 )
             },
             // La striscia compare solo a mappa piena: mentre la tendina scende è la
@@ -348,6 +365,7 @@ private fun MapLayer(
     goActive: Boolean,
     onExitGo: () -> Unit,
     onStartGo: () -> Unit,
+    resetKey: Int,
 ) {
     // Velocità: creare la mappa Google costa centinaia di ms. Per non
     // ritardare gli orari, al primo fotogramma c'è solo lo sfondo;
@@ -395,6 +413,7 @@ private fun MapLayer(
                 onUserClick = onUserClick,
                 onMapGesture = onMapGesture,
                 onStationClick = onStationClick,
+                resetKey = resetKey,
                 modifier = Modifier.fillMaxSize(),
             )
         }

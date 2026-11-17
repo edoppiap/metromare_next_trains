@@ -23,6 +23,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -60,6 +61,18 @@ class MainActivity : ComponentActivity() {
     /** true se l'utente ci ha dato il permesso di posizione. */
     private val locationGranted = MutableStateFlow(false)
 
+    /**
+     * Quando l'app è andata in secondo piano (orologio di sistema, ms), null = è visibile.
+     * Da Android 12 il tasto "indietro" non chiude l'app: la mette in secondo piano
+     * e riaprendola la ritrovi com'era. Se però è rimasta via a lungo, al ritorno
+     * si riparte come appena aperta (vedi [RESET_AFTER_MS]). Niente timer: si
+     * segna l'ora all'uscita e al ritorno si fa la differenza.
+     */
+    private var stoppedAt: Long? = null
+
+    /** Cresce di 1 a ogni "ritorno come appena aperta": schermate e mappa lo ascoltano. */
+    private val resetKey = mutableIntStateOf(0)
+
     // Finestra di sistema "Consenti l'accesso alla posizione?".
     private val permissionRequest =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -89,6 +102,14 @@ class MainActivity : ComponentActivity() {
                 var busInfoOpen by rememberSaveable { mutableStateOf(false) }
                 // Chiusa la giornata, si chiude anche lei (se no riaprendo una giornata ricomparirebbe).
                 androidx.compose.runtime.LaunchedEffect(day == null) { if (day == null) busInfoOpen = false }
+                // Ritorno dopo tanto tempo: si chiudono giornata e menu (vedi stoppedAt).
+                val reset = resetKey.intValue
+                androidx.compose.runtime.LaunchedEffect(reset) {
+                    if (reset == 0) return@LaunchedEffect
+                    infoPage = null
+                    busInfoOpen = false
+                    viewModel.closeDay()
+                }
                 // La giornata si apre SOPRA la schermata principale: così la mappa
                 // resta viva sotto e tornando indietro non va ricaricata.
                 Box {
@@ -108,6 +129,7 @@ class MainActivity : ComponentActivity() {
                         },
                         overlayOpen = day != null || infoPage != null,
                         menuBadge = alerts.badge,
+                        resetKey = reset,
                     )
                     // Giornata: entra da destra. "lastDay" la tiene disegnata mentre esce.
                     var lastDay by remember { mutableStateOf(day) }
@@ -202,6 +224,15 @@ class MainActivity : ComponentActivity() {
                 // Ritorno in primo piano: avvisi Cotral (scarica solo se l'ultima
                 // volta è stata più di 10 minuti fa; mai prima degli orari).
                 alertsViewModel.onForeground()
+                // Via da almeno 10 minuti? Allora si riparte come appena aperta.
+                // Prima refresh(): chiude la modalità Go se nel frattempo è scaduta;
+                // se invece è ancora attiva non si tocca niente (stai viaggiando).
+                val away = stoppedAt?.let { SystemClock.elapsedRealtime() - it }
+                stoppedAt = null
+                if (away != null && away >= RESET_AFTER_MS) {
+                    viewModel.refresh()
+                    if (viewModel.state.value.go == null) resetKey.intValue++
+                }
                 while (true) {
                     viewModel.refresh()
                     alertsViewModel.tick()
@@ -213,6 +244,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        stoppedAt = SystemClock.elapsedRealtime()  // conta anche il telefono in standby
     }
 
     /**
@@ -262,3 +298,6 @@ class MainActivity : ComponentActivity() {
         })
     }
 }
+
+/** Dopo quanto tempo in secondo piano si riparte come appena aperta (10 minuti, scelto dall'utente). */
+private const val RESET_AFTER_MS = 10 * 60_000L

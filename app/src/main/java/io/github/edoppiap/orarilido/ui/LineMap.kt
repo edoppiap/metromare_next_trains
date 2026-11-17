@@ -157,6 +157,8 @@ fun LineMap(
     /** L'utente ha iniziato a spostare la mappa col dito. */
     onMapGesture: () -> Unit,
     onStationClick: (String) -> Unit,
+    /** Cresce quando l'app torna dopo tanto tempo in secondo piano: inquadratura come all'apertura. */
+    resetKey: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -513,6 +515,23 @@ fun LineMap(
             // così la mappa scorre invece di andare a scatti (muovi, fermo, muovi).
             applyFraming(current, if (goActive) 1100 else 500)
         }
+    }
+
+    // Ritorno dopo tanto tempo in secondo piano (vedi MainActivity.stoppedAt):
+    // come all'apertura, "tu + stazione" col percorso (o la linea intera senza
+    // GPS o se sei lontano). Si parte dall'ultima posizione nota; quando arriva
+    // quella nuova l'effetto qui sopra ti segue, perché l'inquadratura è attiva.
+    // Il valore iniziale si ignora: conta solo quando cambia.
+    val initialReset = remember { resetKey }
+    LaunchedEffect(resetKey) {
+        if (resetKey == initialReset || !mapLoaded) return@LaunchedEffect
+        val user = userLocation
+        val station = nearestStation
+        val near = user != null && station != null && Geo.distanceMeters(user, station) <= MAX_ZOOM_DISTANCE_M
+        val target = if (near) RecenterTarget.USER_AND_STATION else RecenterTarget.LINE
+        framing = target
+        if (target == RecenterTarget.USER_AND_STATION && routeReady) routeOn = true
+        applyFraming(target, 600)
     }
 
 
