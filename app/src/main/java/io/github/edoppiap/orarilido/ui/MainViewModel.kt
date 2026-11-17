@@ -665,9 +665,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _day.value = null
     }
 
-    /** Giorno precedente (−1) o successivo (+1). */
-    fun shiftDay(days: Long) {
-        dayRequest = dayRequest?.let { it.copy(date = it.date.plusDays(days)) }
+    /**
+     * La pagina mostra un altro giorno (scorrendo col dito o con ‹ ›): la
+     * giornata ricorda quale, così l'aggiornamento al minuto resta lì.
+     */
+    fun selectDay(date: LocalDate) {
+        if (dayRequest?.date == date) return
+        dayRequest = dayRequest?.copy(date = date)
         buildDay()
     }
 
@@ -676,22 +680,47 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         buildDay()
     }
 
+    /**
+     * Intestazione della giornata (stazione, direzioni). Gli orari dei singoli
+     * giorni li prepara [dayPage], chiamata dalla pagina per il giorno che si
+     * vede e per quelli accanto (che entrano scorrendo).
+     */
     private fun buildDay() {
         val p = provider ?: return
         val req = dayRequest ?: return
+        val old = _day.value
+        _day.value = DayUi(
+            stationName = p.stations.first { it.id == req.stationId }.name,
+            // Nel selettore: prima Ostia poi Roma, come sulla mappa (Ostia a sinistra, Roma a destra).
+            directions = DIRECTIONS.reversed()
+                .filter { p.servesDirection(req.stationId, it.direction) }
+                .map { DirectionTab(it.direction, it.title) },
+            selectedDirection = req.direction,
+            // Il giorno da cui si conta lo scorrimento resta quello d'apertura.
+            openedOn = old?.openedOn ?: req.date,
+            selectedDate = req.date,
+            // Cambia ogni minuto: la pagina ricalcola "passati / prossimo".
+            minute = now().truncatedTo(ChronoUnit.MINUTES),
+        )
+    }
+
+    /** Orari di tutta la giornata [date] per la stazione e la direzione aperte. */
+    fun dayPage(date: LocalDate): DayPage? {
+        val p = provider ?: return null
+        val req = dayRequest ?: return null
         val now = now().truncatedTo(ChronoUnit.MINUTES)
-        val buses = p.busesForDay(req.stationId, req.direction, req.date)
+        val buses = p.busesForDay(req.stationId, req.direction, date)
         // Al capolinea il bus ha un orario esatto: sta in tabella come i treni.
-        val departures = (p.departuresForDay(req.stationId, req.direction, req.date).map { it to false } +
+        val departures = (p.departuresForDay(req.stationId, req.direction, date).map { it to false } +
             buses.filter { it.atTerminus }.map { Departure(it.departure) to true })
             .sortedBy { it.first.time }
         // Il "prossimo" ha senso solo per la giornata in corso.
         val today = serviceToday()
-        val next = if (req.date == today) departures.firstOrNull { !it.first.time.isBefore(now) } else null
+        val next = if (date == today) departures.firstOrNull { !it.first.time.isBefore(now) } else null
 
         // Raggruppa per ora "di servizio": le corse dopo mezzanotte (ora 24)
         // finiscono in fondo, etichettate "00".
-        val start = req.date.atStartOfDay()
+        val start = date.atStartOfDay()
         val hours = departures
             .groupBy { Duration.between(start, it.first.time).toHours() }
             .toSortedMap()
@@ -721,10 +750,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     title = "Bus sostitutivo",
                     text = "Parte da ${origin.name} alle ${b.departure.format(TIME)}. " +
                         "L'orario di passaggio qui non è pubblicato.",
-                    past = req.date.isBefore(today) || (req.date == today && now.isAfter(b.visibleUntil)),
+                    past = date.isBefore(today) || (date == today && now.isAfter(b.visibleUntil)),
                 )
             }
-            p.hasBuses(p.dayTypeOf(req.date)) && p.busStop(req.stationId, req.direction) == null -> {
+            p.hasBuses(p.dayTypeOf(date)) && p.busStop(req.stationId, req.direction) == null -> {
                 val here = p.stations.first { it.id == req.stationId }
                 val nearest = p.busStops.filter { it.direction == req.direction }
                     .minByOrNull { Geo.distanceMeters(GeoPoint(it.lat, it.lon), here) }
@@ -740,25 +769,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             else -> null
         }
 
-        _day.value = DayUi(
-            stationName = p.stations.first { it.id == req.stationId }.name,
-            relativeDay = when (req.date) {
+        return DayPage(
+            relativeDay = when (date) {
                 today -> "Oggi"
                 today.plusDays(1) -> "Domani"
                 today.minusDays(1) -> "Ieri"
                 else -> null
             },
-            dateLabel = req.date.format(DAY_LABEL),
-            dayTypeLabel = when (p.dayTypeOf(req.date)) {
+            dateLabel = date.format(DAY_LABEL),
+            dayTypeLabel = when (p.dayTypeOf(date)) {
                 DayType.WEEKDAY -> "Orario feriale"
                 DayType.SATURDAY -> "Orario del sabato"
                 DayType.HOLIDAY -> "Orario festivo"
             },
-            // Nel selettore: prima Ostia poi Roma, come sulla mappa (Ostia a sinistra, Roma a destra).
-            directions = DIRECTIONS.reversed()
-                .filter { p.servesDirection(req.stationId, it.direction) }
-                .map { DirectionTab(it.direction, it.title) },
-            selectedDirection = req.direction,
             hours = hours,
             nextHourIndex = hours.indexOfFirst { h -> h.cells.any { it.next } }.coerceAtLeast(0),
             busNote = busNote,

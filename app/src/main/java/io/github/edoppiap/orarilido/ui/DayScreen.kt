@@ -43,16 +43,44 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import io.github.edoppiap.orarilido.schedule.Direction
 import io.github.edoppiap.orarilido.ui.theme.OrariTheme
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
+import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.temporal.ChronoUnit
 
 // ---- Dati della schermata (preparati dal ViewModel) ----
 
+/** Intestazione della giornata: uguale per tutti i giorni che si sfogliano. */
 data class DayUi(
     val stationName: String,
+    val directions: List<DirectionTab>,
+    val selectedDirection: Direction,
+    /** Giorno con cui si è aperta la pagina: lo scorrimento conta i giorni da lui. */
+    val openedOn: LocalDate,
+    /** Giorno mostrato adesso. */
+    val selectedDate: LocalDate,
+    /** Minuto attuale: quando cambia si ricalcolano "passati / prossimo". */
+    val minute: LocalDateTime,
+)
+
+/** Orari di UN giorno (una pagina da sfogliare). */
+data class DayPage(
     val relativeDay: String?,    // "Oggi", "Domani", "Ieri" o null
     val dateLabel: String,       // "giovedì 12 novembre"
     val dayTypeLabel: String,    // "Orario feriale", "Orario del sabato", "Orario festivo"
-    val directions: List<DirectionTab>,
-    val selectedDirection: Direction,
     /** Una riga per ora: "07 | 03 18 33 48". */
     val hours: List<HourRow>,
     /** Riga dell'ora del prossimo treno, per scorrere subito lì. */
@@ -83,8 +111,11 @@ data class BusNote(val title: String, val text: String, val past: Boolean)
 @Composable
 fun DayScreen(
     day: DayUi,
+    /** Orari di un giorno (null = orario non ancora pronto). */
+    pageFor: (LocalDate) -> DayPage?,
     onBack: () -> Unit,
-    onShiftDay: (Long) -> Unit,
+    /** La pagina si è fermata su un altro giorno. */
+    onSelectDay: (LocalDate) -> Unit,
     onDirection: (Direction) -> Unit,
     /** "Cos'è?" sotto la riga del bus: apre la pagina sui bus sostitutivi. */
     onBusInfo: () -> Unit = {},
@@ -92,12 +123,25 @@ fun DayScreen(
     BackHandler(onBack = onBack)  // il tasto "indietro" torna alla mappa
     val colors = MaterialTheme.colorScheme
     val onFondo = LocalOnBackground.current  // titolo e note stanno sul fondo, fuori dai riquadri
-    val listState = rememberLazyListState()
-    // Quando cambiano giorno o direzione, scorri all'ora del prossimo treno
-    // (una riga sopra, per vedere anche il treno appena passato).
-    LaunchedEffect(day.dateLabel, day.selectedDirection) {
-        listState.scrollToItem((day.nextHourIndex - 1).coerceAtLeast(0))
+    val scope = rememberCoroutineScope()
+
+    // ---- Giorni da sfogliare ----
+    // Una pagina per giorno: la pagina CENTER è il giorno d'apertura, quelle a
+    // destra i giorni dopo, a sinistra quelli prima (un anno per parte, più che
+    // abbastanza). Trascinando il dito verso sinistra il riquadro di oggi esce
+    // a sinistra e quello di domani entra da destra, attaccato a lui.
+    fun dateOf(page: Int): LocalDate = day.openedOn.plusDays((page - CENTER).toLong())
+    val pager = rememberPagerState(
+        initialPage = CENTER + ChronoUnit.DAYS.between(day.openedOn, day.selectedDate).toInt(),
+        pageCount = { CENTER * 2 + 1 },
+    )
+    // Quando la pagina si ferma su un giorno, lo diciamo al ViewModel.
+    LaunchedEffect(pager) {
+        snapshotFlow { pager.settledPage }.collect { onSelectDay(dateOf(it)) }
     }
+    // Orari dei giorni già preparati, ricalcolati al cambio di minuto o di direzione.
+    val pages = remember(day.minute, day.selectedDirection) { HashMap<LocalDate, DayPage?>() }
+    fun page(date: LocalDate): DayPage? = pages.getOrPut(date) { pageFor(date) }
 
     Column(
         Modifier
@@ -113,6 +157,7 @@ fun DayScreen(
         }
 
         // Selettore del giorno: ‹  Oggi · giovedì 12 novembre · Feriale  ›
+        // Le frecce stanno ferme; il titolo scorre insieme al riquadro degli orari.
         Row(
             Modifier
                 .fillMaxWidth()
@@ -122,21 +167,13 @@ fun DayScreen(
                 .padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = { onShiftDay(-1) }) { Chevron(colors.primary, pointsLeft = true) }
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    day.relativeDay ?: day.dateLabel.replaceFirstChar { it.uppercase() },
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colors.onSurface,
-                )
-                Text(
-                    (if (day.relativeDay != null) day.dateLabel + " · " else "") + day.dayTypeLabel,
-                    fontSize = 13.sp,
-                    color = colors.onSurfaceVariant,
-                )
+            IconButton(onClick = { scope.launch { pager.animateScrollToPage(pager.currentPage - 1) } }) {
+                Chevron(colors.primary, pointsLeft = true)
             }
-            IconButton(onClick = { onShiftDay(1) }) { Chevron(colors.primary, pointsLeft = false) }
+            SlidingDayTitle(pager, Modifier.weight(1f)) { p -> page(dateOf(p)) }
+            IconButton(onClick = { scope.launch { pager.animateScrollToPage(pager.currentPage + 1) } }) {
+                Chevron(colors.primary, pointsLeft = false)
+            }
         }
 
         // Direzioni: selettore con la pillola blu che scivola sotto quella scelta.
@@ -149,29 +186,22 @@ fun DayScreen(
             segmentPadding = 14.dp,
         )
 
-        // Tabella: una riga per ora, dentro una scheda
-        LazyColumn(
-            Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(20.dp))
-                .background(colors.surface),
-            state = listState,
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-        ) {
-            itemsIndexed(day.hours) { i, hour ->
-                if (i > 0) HorizontalDivider(color = colors.outlineVariant)
-                HourLine(hour)
-            }
-            day.busNote?.let { note ->
-                item {
-                    if (day.hours.isNotEmpty()) HorizontalDivider(color = colors.outlineVariant)
-                    BusNoteLine(note, onBusInfo)
-                }
-            }
+        // Riquadri degli orari, uno per giorno, che scorrono sotto il dito.
+        // Il pager prepara in anticipo anche i giorni accanto: niente attese.
+        HorizontalPager(
+            state = pager,
+            modifier = Modifier.weight(1f),
+            pageSpacing = 12.dp,
+            beyondViewportPageCount = 1,
+            key = { it },
+        ) { p ->
+            val dayPage = page(dateOf(p))
+            if (dayPage != null) DayTable(dayPage, day.selectedDirection, onBusInfo)
         }
 
-        // Legenda del "?" rosso, solo se in questa giornata ci sono corse da confermare.
-        if (day.hours.any { h -> h.cells.any { it.unconfirmed } }) {
+        // Legenda del "?" rosso, solo se nel giorno mostrato ci sono corse da confermare.
+        val shown = page(dateOf(pager.currentPage))
+        if (shown != null && shown.hours.any { h -> h.cells.any { it.unconfirmed } }) {
             Text(
                 buildAnnotatedString {
                     withStyle(SpanStyle(color = onFondo.question, fontWeight = FontWeight.Bold)) { append("? ") }
@@ -198,6 +228,80 @@ fun DayScreen(
             textAlign = TextAlign.Center,
             color = onFondo.muted,
         )
+    }
+}
+
+/** Pagine per parte: un anno avanti e uno indietro dal giorno d'apertura. */
+private const val CENTER = 366
+
+/**
+ * Titolo del giorno ("Oggi" + data e tipo di orario) BLOCCATO al riquadro
+ * degli orari: se il riquadro ha percorso metà schermo, il titolo ha percorso
+ * metà del suo spazio tra le frecce. Si disegnano il giorno attuale e i due
+ * accanto, ognuno spostato in base a quanto gli manca per arrivare al centro.
+ */
+@Composable
+private fun SlidingDayTitle(pager: PagerState, modifier: Modifier, pageAt: (Int) -> DayPage?) {
+    val colors = MaterialTheme.colorScheme
+    var width by remember { mutableIntStateOf(0) }
+    Box(modifier.clipToBounds().onSizeChanged { width = it.width }) {
+        val current = pager.currentPage
+        for (p in current - 1..current + 1) {
+            val dayPage = pageAt(p) ?: continue
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        // Distanza (in pagine) dal centro: 0 = in mezzo, 1 = appena fuori a destra.
+                        val distance = p - (pager.currentPage + pager.currentPageOffsetFraction)
+                        translationX = distance * width
+                    },
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    dayPage.relativeDay ?: dayPage.dateLabel.replaceFirstChar { it.uppercase() },
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.onSurface,
+                )
+                Text(
+                    (if (dayPage.relativeDay != null) dayPage.dateLabel + " · " else "") + dayPage.dayTypeLabel,
+                    fontSize = 13.sp,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** Riquadro bianco con una riga per ora: gli orari di un giorno. */
+@Composable
+private fun DayTable(page: DayPage, direction: Direction, onBusInfo: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    // All'apertura (e al cambio di direzione) subito all'ora del prossimo treno,
+    // una riga sopra per vedere anche quello appena passato. Negli altri
+    // giorni non c'è un "prossimo": si parte dal primo treno.
+    val listState = remember(direction) {
+        LazyListState(firstVisibleItemIndex = (page.nextHourIndex - 1).coerceAtLeast(0))
+    }
+    LazyColumn(
+        Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(20.dp))
+            .background(colors.surface),
+        state = listState,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        itemsIndexed(page.hours) { i, hour ->
+            if (i > 0) HorizontalDivider(color = colors.outlineVariant)
+            HourLine(hour)
+        }
+        page.busNote?.let { note ->
+            item {
+                if (page.hours.isNotEmpty()) HorizontalDivider(color = colors.outlineVariant)
+                BusNoteLine(note, onBusInfo)
+            }
+        }
     }
 }
 
@@ -298,29 +402,37 @@ private fun BusNoteLine(note: BusNote, onInfo: () -> Unit) {
 @Preview(showBackground = true, heightDp = 700, widthDp = 390)
 @Composable
 private fun DayScreenPreview() {
+    val today = LocalDate.of(2026, 11, 12)
     OrariTheme {
         DayScreen(
             DayUi(
                 stationName = "Acilia",
-                relativeDay = "Oggi",
-                dateLabel = "giovedì 12 novembre",
-                dayTypeLabel = "Orario feriale",
                 directions = listOf(
                     DirectionTab(Direction.TO_OSTIA, "Verso Ostia"),
                     DirectionTab(Direction.TO_ROMA, "Verso Roma"),
                 ),
                 selectedDirection = Direction.TO_ROMA,
-                hours = (5..9).map { h ->
-                    HourRow(
-                        "%02d".format(h),
-                        listOf("03", "10", "18", "33", "48").map {
-                            MinuteCell(it, unconfirmed = it == "10", past = h < 7, next = h == 7 && it == "03")
-                        },
-                    )
-                },
-                nextHourIndex = 2,
+                openedOn = today,
+                selectedDate = today,
+                minute = today.atTime(7, 0),
             ),
-            onBack = {}, onShiftDay = {}, onDirection = {},
+            pageFor = { date ->
+                DayPage(
+                    relativeDay = if (date == today) "Oggi" else null,
+                    dateLabel = "giovedì 12 novembre",
+                    dayTypeLabel = "Orario feriale",
+                    hours = (5..9).map { h ->
+                        HourRow(
+                            "%02d".format(h),
+                            listOf("03", "10", "18", "33", "48").map {
+                                MinuteCell(it, unconfirmed = it == "10", past = h < 7, next = h == 7 && it == "03")
+                            },
+                        )
+                    },
+                    nextHourIndex = 2,
+                )
+            },
+            onBack = {}, onSelectDay = {}, onDirection = {},
         )
     }
 }

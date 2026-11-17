@@ -142,8 +142,9 @@ class MainActivity : ComponentActivity() {
                         lastDay?.let {
                             DayScreen(
                                 it,
+                                pageFor = viewModel::dayPage,
                                 onBack = viewModel::closeDay,
-                                onShiftDay = viewModel::shiftDay,
+                                onSelectDay = viewModel::selectDay,
                                 onDirection = viewModel::setDayDirection,
                                 onBusInfo = { busInfoOpen = true },
                             )
