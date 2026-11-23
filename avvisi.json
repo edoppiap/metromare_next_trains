@@ -1,6 +1,14 @@
 {
-  "updated": "2026-11-21T00:57",
+  "updated": "2026-11-23T13:32",
   "alerts": [
+    {
+      "id": 5975,
+      "modified": "2026-11-23T13:04:26",
+      "level": "urgente",
+      "title": "Metromare, chiusura stazioni di Ostia Antica, Lido Nord e Lido Centro per intervento dei VV.FF.",
+      "link": "https://cotralspa.it/avvisi/metromare-chiusura-stazioni-di-ostia-antica-lido-nord-e-lido-centro-per-intervento-dei-vv-ff/",
+      "end": null
+    },
     {
       "id": 5935,
       "modified": "2026-11-13T15:00:38",
