@@ -1,6 +1,18 @@
 {
-  "updated": "2026-11-24T11:23",
+  "updated": "2026-11-24T21:51",
   "alerts": [
+    {
+      "id": 6007,
+      "modified": "2026-11-24T17:06:46",
+      "level": "urgente",
+      "title": "Sciopero Venerdì 4 dicembre",
+      "link": "https://cotralspa.it/avvisi/sciopero-venerdi-4-dicembre/",
+      "end": "2026-12-04T23:59:00",
+      "trainStrikeBands": [
+        "08:30-16:59",
+        "20:00-23:59"
+      ]
+    },
     {
       "id": 5935,
       "modified": "2026-11-13T15:00:38",
